@@ -653,9 +653,7 @@ func (s *server) storageFromSettings(value map[string]any) (imagehub.Storage, er
 		if s.cfg.TelegramToken == "" || chatID == "" {
 			return nil, errors.New("Telegram storage requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
 		}
-		if s.telegramStorage == nil {
-			s.telegramStorage = imagehub.NewTelegramStorage(s.cfg.TelegramToken, chatID)
-		}
+		s.telegramStorage = imagehub.NewTelegramStorage(s.cfg.TelegramToken, chatID)
 		return s.telegramStorage, nil
 	case "s3":
 		secret, err := decryptSecret(s.cfg.AppSecret, fmt.Sprint(value["s3_secret_key"]))
