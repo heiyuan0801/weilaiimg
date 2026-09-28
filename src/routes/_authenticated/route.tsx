@@ -7,7 +7,7 @@ const adminPaths = ['/admin-images', '/users', '/settings/system']
 
 function ensureRouteAccess(pathname: string, role: string) {
   if (role !== 'admin' && adminPaths.some((path) => pathname === path || pathname.startsWith(`${path}/`))) {
-    throw redirect({ to: '/dashboard' })
+    throw redirect({ to: '/' })
   }
 }
 

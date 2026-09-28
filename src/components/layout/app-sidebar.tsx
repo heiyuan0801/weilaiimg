@@ -17,7 +17,7 @@ import { NavGroup } from './nav-group'
 import { NavUser } from './nav-user'
 import { TeamSwitcher } from './team-switcher'
 import { getCurrentUser, listTeams, type Team } from '@/lib/imagehub-api'
-import { type NavGroup, type NavItem } from './types'
+import { type NavGroup as NavGroupType, type NavItem } from './types'
 import { useI18n } from '@/lib/i18n'
 
 export function AppSidebar() {
@@ -40,7 +40,7 @@ export function AppSidebar() {
       }),
     })).filter((group) => group.items.length > 0)
   const labels: Record<string, string> = { Library: 'nav.library', Administration: 'nav.administration', Personal: 'nav.personal', Dashboard: 'nav.dashboard', 'Image library': 'nav.images', 'All media': 'nav.allMedia', Teams: 'nav.teams', Billing: 'nav.billing', 'Custom domains': 'nav.domains', Users: 'nav.users', Settings: 'nav.settings', Profile: 'nav.profile', Account: 'nav.account', Appearance: 'nav.appearance', Notifications: 'nav.notifications', Display: 'nav.display', 'System settings': 'nav.system' }
-  const translatedNavGroups = visibleNavGroups.map((group) => ({ ...group, title: t(labels[group.title] ?? group.title, group.title), items: group.items.map((item) => ({ ...item, title: t(labels[item.title] ?? item.title, item.title), items: item.items?.map((subItem) => ({ ...subItem, title: t(labels[subItem.title] ?? subItem.title, subItem.title) })) })) })) as NavGroup[]
+  const translatedNavGroups = visibleNavGroups.map((group) => ({ ...group, title: t(labels[group.title] ?? group.title, group.title), items: group.items.map((item) => ({ ...item, title: t(labels[item.title] ?? item.title, item.title), items: item.items?.map((subItem) => ({ ...subItem, title: t(labels[subItem.title] ?? subItem.title, subItem.title) })) })) })) as NavGroupType[]
   return (
     <Sidebar collapsible={collapsible} variant={variant}>
       <SidebarHeader>
