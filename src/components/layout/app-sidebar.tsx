@@ -26,7 +26,17 @@ export function AppSidebar() {
   const [profile, setProfile] = useState({ name: 'ImageHub user', email: '', avatar: '/avatars/shadcn.jpg' })
   const [role, setRole] = useState('user')
   const [teams, setTeams] = useState<Team[]>([])
-  useEffect(() => { void Promise.all([getCurrentUser(), listTeams()]).then(([user, nextTeams]) => { setProfile({ name: user.display_name || user.email.split('@')[0], email: user.email, avatar: '/avatars/shadcn.jpg' }); setRole(user.role); setTeams(nextTeams) }).catch(() => undefined) }, [])
+  useEffect(() => {
+    // Load the identity independently from team data. A user without a team,
+    // or a temporary team API failure, must still see administrator links.
+    void getCurrentUser()
+      .then((user) => {
+        setProfile({ name: user.display_name || user.email.split('@')[0], email: user.email, avatar: '/avatars/shadcn.jpg' })
+        setRole(user.role.toLowerCase())
+      })
+      .catch(() => undefined)
+    void listTeams().then(setTeams).catch(() => setTeams([]))
+  }, [])
   const switcherTeams = (teams.length ? teams : [{ id: 'personal', name: 'Personal', slug: 'personal', role: 'owner', quota_bytes: 0, used_bytes: 0, plan_code: 'free' }]).map((team) => ({ name: team.name, logo: Command, plan: team.plan_code }))
   const visibleNavGroups = sidebarData.navGroups
     .filter((group) => !group.roles || group.roles.includes(role))

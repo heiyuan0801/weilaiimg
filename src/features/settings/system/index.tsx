@@ -26,7 +26,7 @@ function Toggle({ label, checked, onChange, description }: ToggleProps) {
 }
 
 const defaults: SystemSettings = {
-  site: { default_language: 'en-US' },
+  site: { site_name: 'ImageHub', logo_url: '', favicon_url: '', default_language: 'en-US' },
   registration: { enabled: true, require_email_verification: false, password_reset_enabled: true },
   upload: { max_file_bytes: 20 * 1024 * 1024, daily_upload_limit: 100, allow_svg: true, allow_video: true, allow_remote_url: true, anonymous_enabled: false, guest_daily_upload_limit: 10, guest_daily_upload_bytes: 0, guest_retention_days: 7, short_links_enabled: true, short_code_length: 8, naming_mode: 'sha256', directory_rule: 'hash2', path_template: '', random_length: 12, default_visibility: 'private' },
   email: { smtp_host: '', smtp_port: 587, smtp_username: '', smtp_security: 'starttls', from_name: 'ImageHub', from_address: '' },
@@ -81,8 +81,16 @@ export function SystemSettingsPage() {
         <div><h1 className='text-2xl font-bold tracking-tight'>System settings</h1><p className='text-muted-foreground'>Configure registration, email delivery, upload policies, storage, CDN and external login.</p></div>
         <div className='grid gap-6 xl:grid-cols-2'>
           <Card>
-            <CardHeader><CardTitle>Site language</CardTitle><CardDescription>Visitors use their browser language unless they have selected a language manually.</CardDescription></CardHeader>
-            <CardContent className='space-y-4'><div className='space-y-2'><Label>Default language</Label><select className='h-9 w-full rounded-md border bg-transparent px-3 text-sm' value={String(value('site', 'default_language'))} onChange={(event) => update('site', 'default_language', event.target.value)}><option value='en-US'>English</option><option value='zh-CN'>简体中文</option></select></div><Button onClick={() => save('site')} disabled={saving === 'site'}>{saving === 'site' ? 'Saving…' : 'Save site language'}</Button></CardContent>
+            <CardHeader><CardTitle>Site branding & language</CardTitle><CardDescription>Set the public site name and optional logo and favicon URLs. Changes are applied to the web interface after saving.</CardDescription></CardHeader>
+            <CardContent className='space-y-4'>
+              <div className='grid gap-4 sm:grid-cols-2'>
+                <div className='space-y-2 sm:col-span-2'><Label>Website name</Label><Input placeholder='ImageHub' value={String(value('site', 'site_name'))} onChange={(event) => update('site', 'site_name', event.target.value)} /></div>
+                <div className='space-y-2'><Label>Logo URL</Label><Input placeholder='https://example.com/logo.svg' value={String(value('site', 'logo_url'))} onChange={(event) => update('site', 'logo_url', event.target.value)} /></div>
+                <div className='space-y-2'><Label>Favicon URL</Label><Input placeholder='https://example.com/favicon.ico' value={String(value('site', 'favicon_url'))} onChange={(event) => update('site', 'favicon_url', event.target.value)} /></div>
+                <div className='space-y-2 sm:col-span-2'><Label>Default language</Label><select className='h-9 w-full rounded-md border bg-transparent px-3 text-sm' value={String(value('site', 'default_language'))} onChange={(event) => update('site', 'default_language', event.target.value)}><option value='en-US'>English</option><option value='zh-CN'>简体中文</option></select></div>
+              </div>
+              <Button onClick={() => save('site')} disabled={saving === 'site'}>{saving === 'site' ? 'Saving…' : 'Save site settings'}</Button>
+            </CardContent>
           </Card>
           <Card>
             <CardHeader><CardTitle>Registration & account</CardTitle><CardDescription>Control how users create and recover accounts.</CardDescription></CardHeader>

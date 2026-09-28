@@ -27,6 +27,17 @@ export async function imageHubFetch<T>(path: string, init: RequestInit = {}): Pr
 
 export type SystemSettings = Record<string, Record<string, unknown>>
 
+export type PublicSiteConfig = {
+  site_name: string
+  logo_url: string
+  favicon_url: string
+  default_language: string
+}
+
+export function getPublicSiteConfig() {
+  return imageHubFetch<PublicSiteConfig>('/api/v1/site/config')
+}
+
 export function login(input: { email: string; password: string; remember?: boolean }) {
   return imageHubFetch<{ user_id: string; role: string }>('/api/v1/auth/login', {
     method: 'POST',

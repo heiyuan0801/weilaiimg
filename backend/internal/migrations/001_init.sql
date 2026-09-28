@@ -213,7 +213,7 @@ VALUES ('pro', 'Pro', 1200, 107374182400, 1073741824000, 5, '{"remote_import":tr
        ('team', 'Team', 3900, 1073741824000, 10737418240000, 25, '{"remote_import":true,"custom_domain":true,"video":true,"priority_support":true}'::jsonb)
 ON CONFLICT (code) DO NOTHING;
 INSERT INTO system_settings (key, value) VALUES
- ('site', '{"default_language":"en-US"}'::jsonb),
+ ('site', '{"site_name":"ImageHub","logo_url":"","favicon_url":"","default_language":"en-US"}'::jsonb),
  ('registration', '{"enabled":true,"require_email_verification":false,"password_reset_enabled":true}'::jsonb),
  ('upload', '{"max_file_bytes":20971520,"daily_upload_limit":100,"allowed_mime_types":["image/jpeg","image/png","image/gif","image/webp","image/avif","image/svg+xml","video/mp4","video/webm"],"allow_svg":true,"allow_video":true,"allow_remote_url":true,"anonymous_enabled":false,"guest_daily_upload_limit":10,"guest_daily_upload_bytes":0,"guest_retention_days":7,"short_links_enabled":true,"short_code_length":8,"naming_mode":"sha256","directory_rule":"hash2","path_template":"","random_length":12,"default_visibility":"private"}'::jsonb),
  ('email', '{"smtp_host":"","smtp_port":587,"smtp_username":"","smtp_security":"starttls","from_name":"ImageHub","from_address":""}'::jsonb),

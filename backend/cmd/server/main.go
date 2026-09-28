@@ -129,6 +129,7 @@ func main() {
 func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
+	mux.HandleFunc("GET /api/v1/site/config", s.publicSiteConfig)
 	mux.HandleFunc("POST /api/v1/auth/register", s.register)
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.logout)
@@ -184,6 +185,32 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /s/{code}", s.shortLink)
 	mux.HandleFunc("GET /api/v1/public/config", s.publicConfig)
 	mux.HandleFunc("GET /", s.frontend)
+}
+
+// publicSiteConfig exposes only non-sensitive branding values so the login and
+// public pages can use the administrator's site name, logo and favicon.
+func (s *server) publicSiteConfig(w http.ResponseWriter, r *http.Request) {
+	value := s.settings(r.Context(), "site")
+	result := map[string]any{
+		"site_name":        strings.TrimSpace(fmt.Sprint(value["site_name"])),
+		"logo_url":         strings.TrimSpace(fmt.Sprint(value["logo_url"])),
+		"favicon_url":      strings.TrimSpace(fmt.Sprint(value["favicon_url"])),
+		"default_language": strings.TrimSpace(fmt.Sprint(value["default_language"])),
+	}
+	if result["site_name"] == "" || result["site_name"] == "<nil>" {
+		result["site_name"] = "ImageHub"
+	}
+	if result["default_language"] == "" || result["default_language"] == "<nil>" {
+		result["default_language"] = "en-US"
+	}
+	if result["logo_url"] == "<nil>" {
+		result["logo_url"] = ""
+	}
+	if result["favicon_url"] == "<nil>" {
+		result["favicon_url"] = ""
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *server) withMiddleware(next http.Handler) http.Handler {

@@ -42,13 +42,7 @@ export const sidebarData: SidebarData = {
       items: [
         { title: 'All media', url: '/admin-images', icon: Images },
         { title: 'Users', url: '/users', icon: Users },
-        {
-          title: 'Settings',
-          icon: Settings,
-          items: [
-            { title: 'System settings', url: '/settings/system', icon: ShieldCheck },
-          ],
-        },
+        { title: 'System settings', url: '/settings/system', icon: ShieldCheck },
       ],
     },
     {

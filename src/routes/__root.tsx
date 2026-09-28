@@ -7,6 +7,7 @@ import { NavigationProgress } from '@/components/navigation-progress'
 import { GeneralError } from '@/features/errors/general-error'
 import { NotFoundError } from '@/features/errors/not-found-error'
 import { I18nProvider } from '@/lib/i18n'
+import { SiteConfigSync } from '@/components/site-config-sync'
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient
@@ -15,6 +16,7 @@ export const Route = createRootRouteWithContext<{
     return (
       <>
         <I18nProvider>
+          <SiteConfigSync />
           <NavigationProgress />
           <Outlet />
           <Toaster duration={5000} />
