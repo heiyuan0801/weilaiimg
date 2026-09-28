@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Copy, ExternalLink, ImagePlus, Languages, LogIn, UploadCloud } from 'lucide-react'
+import { Check, Copy, Database, ExternalLink, ImagePlus, Languages, LogIn, UploadCloud, Users } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -88,6 +88,15 @@ export function PublicHome() {
         <Badge variant='secondary'>{t('home.badge')}</Badge>
         <h1 className='text-4xl font-bold tracking-tight sm:text-5xl'>{t('home.title')}</h1>
         <p className='mx-auto max-w-2xl text-muted-foreground'>{t('home.subtitle')}</p>
+        <div className='flex flex-wrap justify-center gap-3 pt-2'>
+          {config?.registration?.enabled !== false && <Button asChild><Link to='/sign-up'>{t('home.registerAction')}</Link></Button>}
+          <Button variant='outline' asChild><Link to='/sign-in'><LogIn className='me-2 h-4 w-4' />{t('home.loginAction')}</Link></Button>
+        </div>
+      </section>
+      <section className='grid gap-4 md:grid-cols-3'>
+        <Card><CardContent className='flex gap-3 p-5'><UploadCloud className='mt-1 h-5 w-5 text-primary' /><div><h2 className='font-semibold'>{t('home.featureMediaTitle')}</h2><p className='text-sm text-muted-foreground'>{t('home.featureMediaDescription')}</p></div></CardContent></Card>
+        <Card><CardContent className='flex gap-3 p-5'><Database className='mt-1 h-5 w-5 text-primary' /><div><h2 className='font-semibold'>{t('home.featureStorageTitle')}</h2><p className='text-sm text-muted-foreground'>{t('home.featureStorageDescription')}</p></div></CardContent></Card>
+        <Card><CardContent className='flex gap-3 p-5'><Users className='mt-1 h-5 w-5 text-primary' /><div><h2 className='font-semibold'>{t('home.featureTeamTitle')}</h2><p className='text-sm text-muted-foreground'>{t('home.featureTeamDescription')}</p></div></CardContent></Card>
       </section>
       <Card>
         <CardHeader><CardTitle>{t('upload.title')}</CardTitle><CardDescription>{guestEnabled ? `${t('upload.guestEnabled')}${config?.upload?.guest_retention_days ? ` · ${t('upload.expiresAfter')} ${config.upload.guest_retention_days} days.` : '.'}` : t('upload.disabled')}</CardDescription></CardHeader>
