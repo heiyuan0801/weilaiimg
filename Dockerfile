@@ -10,7 +10,7 @@ ENV http_proxy=${HTTP_PROXY} \
     HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
     ALL_PROXY=${ALL_PROXY}
-RUN corepack enable
+RUN npm install -g pnpm@10.33.0
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY . .
