@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Copy, FileImage, ImagePlus, Link2, RefreshCw, Search, Trash2, UploadCloud, Video } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, FileImage, ImagePlus, Link2, RefreshCw, Search, Trash2, UploadCloud } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'

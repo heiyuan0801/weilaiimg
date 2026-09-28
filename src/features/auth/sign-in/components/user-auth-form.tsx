@@ -58,7 +58,7 @@ export function UserAuthForm({
   const { auth } = useAuthStore()
   useEffect(() => { void listPublicOIDCProviders().then(setOIDCProviders).catch(() => undefined) }, [])
 
-  const form = useForm<z.infer<typeof formSchema>>({
+  const form = useForm<z.input<typeof formSchema>, unknown, z.output<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       email: '',
@@ -67,7 +67,7 @@ export function UserAuthForm({
     },
   })
 
-  async function onSubmit(data: z.infer<typeof formSchema>) {
+  async function onSubmit(data: z.output<typeof formSchema>) {
     setIsLoading(true)
     try {
       const result = await login(data)

@@ -49,7 +49,8 @@ export function SystemSettingsPage() {
       const legacyBackend = String(rawStorage.backend ?? 'local') as StorageChannelConfig['backend']
       const storageData = Array.isArray(rawStorage.channels) ? rawStorage : { ...rawStorage, default_channel: legacyBackend, channels: [{ id: legacyBackend, name: legacyBackend === 'local' ? 'Local volume' : legacyBackend === 'telegram' ? 'Telegram' : 'S3', backend: legacyBackend, enabled: true, ...rawStorage }] }
       const source = { ...data, storage: storageData }
-      const merged = Object.fromEntries(Object.entries(defaults).map(([key, base]) => [key, { ...(base as Record<string, unknown>), ...((source[key] ?? {}) as Record<string, unknown>) }])) as SystemSettings
+      const typedSource = source as SystemSettings
+      const merged = Object.fromEntries(Object.entries(defaults).map(([key, base]) => [key, { ...(base as Record<string, unknown>), ...((typedSource[key] ?? {}) as Record<string, unknown>) }])) as SystemSettings
       setSettings(merged); setProviders(nextProviders)
     }).catch((error) => toast.error(error instanceof Error ? error.message : 'Could not load settings')).finally(() => setLoading(false))
   }, [])
