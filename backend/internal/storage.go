@@ -14,6 +14,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 type StoredObject struct{ Key, Backend string }
@@ -87,6 +91,69 @@ func (s *LocalStorage) Delete(_ context.Context, key string) error {
 type TelegramStorage struct {
 	token, chatID string
 	client        *http.Client
+}
+
+// S3Storage supports AWS S3 and S3-compatible services such as MinIO and R2.
+// The endpoint is optional for AWS and required for most self-hosted services.
+type S3Storage struct {
+	client *s3.Client
+	bucket string
+	prefix string
+}
+
+func NewS3Storage(endpoint, region, bucket, accessKey, secretKey, prefix string, pathStyle bool) (*S3Storage, error) {
+	if strings.TrimSpace(region) == "" {
+		region = "us-east-1"
+	}
+	if strings.TrimSpace(bucket) == "" || strings.TrimSpace(accessKey) == "" || strings.TrimSpace(secretKey) == "" {
+		return nil, fmt.Errorf("s3 bucket, access key and secret key are required")
+	}
+	config := aws.Config{
+		Region:      region,
+		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
+	}
+	client := s3.NewFromConfig(config, func(options *s3.Options) {
+		options.UsePathStyle = pathStyle
+		if strings.TrimSpace(endpoint) != "" {
+			options.BaseEndpoint = aws.String(strings.TrimRight(endpoint, "/"))
+		}
+	})
+	return &S3Storage{client: client, bucket: bucket, prefix: strings.Trim(prefix, "/")}, nil
+}
+
+func (s *S3Storage) objectKey(key string) string {
+	key = strings.TrimLeft(key, "/")
+	if s.prefix == "" {
+		return key
+	}
+	return s.prefix + "/" + key
+}
+
+func (s *S3Storage) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) (StoredObject, error) {
+	input := &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(s.objectKey(key)), Body: r}
+	if size >= 0 {
+		input.ContentLength = aws.Int64(size)
+	}
+	if contentType != "" {
+		input.ContentType = aws.String(contentType)
+	}
+	if _, err := s.client.PutObject(ctx, input); err != nil {
+		return StoredObject{}, err
+	}
+	return StoredObject{Key: key, Backend: "s3"}, nil
+}
+
+func (s *S3Storage) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	result, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(s.objectKey(key))})
+	if err != nil {
+		return nil, err
+	}
+	return result.Body, nil
+}
+
+func (s *S3Storage) Delete(ctx context.Context, key string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(s.objectKey(key))})
+	return err
 }
 
 func NewTelegramStorage(token, chatID string) *TelegramStorage {

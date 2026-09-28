@@ -46,6 +46,7 @@ type server struct {
 	storage         imagehub.Storage
 	localStorage    imagehub.Storage
 	telegramStorage imagehub.Storage
+	s3Storage       imagehub.Storage
 	log             *slog.Logger
 }
 
@@ -93,6 +94,9 @@ func main() {
 		if err = s.bootstrapAdmin(ctx); err != nil {
 			logger.Error("admin bootstrap failed", "error", err)
 			os.Exit(1)
+		}
+		if err = s.applyStorageSettings(ctx); err != nil {
+			logger.Warn("configured storage unavailable; using local storage", "error", err)
 		}
 	}
 	if cfg.RedisURL != "" {
@@ -417,9 +421,9 @@ func (s *server) dashboard(w http.ResponseWriter, r *http.Request) {
 	_ = s.db.QueryRow(r.Context(), `SELECT quota_bytes FROM users WHERE id=$1`, u.ID).Scan(&quota)
 	result := map[string]any{"images": images, "used_bytes": used, "quota_bytes": quota, "teams": teams}
 	if u.Role == "admin" {
-		var totalUsers, newUsers, totalFiles, physicalFiles, todayUploads, guestUploads, userUploads, imageCount, videoCount int64
+		var totalUsers, activeUsers, pendingUsers, disabledUsers, newUsers, totalFiles, physicalFiles, todayUploads, guestUploads, userUploads, imageCount, videoCount int64
 		var todayBytes int64
-		_ = s.db.QueryRow(r.Context(), `SELECT count(*) FROM users`).Scan(&totalUsers)
+		_ = s.db.QueryRow(r.Context(), `SELECT count(*),count(*) FILTER (WHERE status='active'),count(*) FILTER (WHERE status='pending'),count(*) FILTER (WHERE status='disabled') FROM users`).Scan(&totalUsers, &activeUsers, &pendingUsers, &disabledUsers)
 		_ = s.db.QueryRow(r.Context(), `SELECT count(*) FROM users WHERE created_at >= CURRENT_DATE`).Scan(&newUsers)
 		_ = s.db.QueryRow(r.Context(), `SELECT count(*) FROM images WHERE deleted_at IS NULL`).Scan(&totalFiles)
 		_ = s.db.QueryRow(r.Context(), `SELECT count(DISTINCT object_key) FROM images WHERE deleted_at IS NULL`).Scan(&physicalFiles)
@@ -428,7 +432,14 @@ func (s *server) dashboard(w http.ResponseWriter, r *http.Request) {
 		userUploads = totalFiles - guestUploads
 		_ = s.db.QueryRow(r.Context(), `SELECT count(*) FROM images WHERE deleted_at IS NULL AND mime_type LIKE 'image/%'`).Scan(&imageCount)
 		_ = s.db.QueryRow(r.Context(), `SELECT count(*) FROM images WHERE deleted_at IS NULL AND mime_type LIKE 'video/%'`).Scan(&videoCount)
-		result["admin"] = map[string]any{"total_users": totalUsers, "new_users_today": newUsers, "total_files": totalFiles, "physical_files": physicalFiles, "today_uploads": todayUploads, "today_upload_bytes": todayBytes, "guest_uploads": guestUploads, "user_uploads": userUploads, "image_count": imageCount, "video_count": videoCount}
+		activeUserPercent, registeredUploadPercent := 0.0, 0.0
+		if totalUsers > 0 {
+			activeUserPercent = float64(activeUsers) / float64(totalUsers) * 100
+		}
+		if totalFiles > 0 {
+			registeredUploadPercent = float64(userUploads) / float64(totalFiles) * 100
+		}
+		result["admin"] = map[string]any{"total_users": totalUsers, "active_users": activeUsers, "pending_users": pendingUsers, "disabled_users": disabledUsers, "active_user_percent": activeUserPercent, "new_users_today": newUsers, "total_files": totalFiles, "physical_files": physicalFiles, "today_uploads": todayUploads, "today_upload_bytes": todayBytes, "guest_uploads": guestUploads, "user_uploads": userUploads, "registered_upload_percent": registeredUploadPercent, "image_count": imageCount, "video_count": videoCount}
 	}
 	writeJSON(w, 200, result)
 }
@@ -531,20 +542,27 @@ func (s *server) updateSetting(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if key == "storage" {
+		if secret, ok := value["s3_secret_key"].(string); ok && secret != "" && secret != "********" && !strings.HasPrefix(secret, "enc:") && !strings.HasPrefix(secret, "plain:") {
+			if encrypted, encErr := encryptSecret(s.cfg.AppSecret, secret); encErr == nil {
+				value["s3_secret_key"] = encrypted
+			} else {
+				writeErr(w, 500, "SETTINGS_SAVE_FAILED", "could not protect S3 secret key")
+				return
+			}
+		}
+		if _, err := s.storageFromSettings(value); err != nil {
+			writeErr(w, http.StatusBadRequest, "STORAGE_UNAVAILABLE", err.Error())
+			return
+		}
+	}
 	raw, _ := json.Marshal(value)
 	if _, err := s.db.Exec(r.Context(), `INSERT INTO system_settings(key,value,updated_at) VALUES($1,$2,now()) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()`, key, raw); err != nil {
 		writeErr(w, 500, "SETTINGS_SAVE_FAILED", "could not save settings")
 		return
 	}
 	if key == "storage" {
-		if backend, ok := value["backend"].(string); ok && backend == "telegram" && s.cfg.TelegramToken != "" && s.cfg.TelegramChatID != "" {
-			if s.telegramStorage == nil {
-				s.telegramStorage = imagehub.NewTelegramStorage(s.cfg.TelegramToken, s.cfg.TelegramChatID)
-			}
-			s.storage = s.telegramStorage
-		} else if backend, ok := value["backend"].(string); ok && backend == "local" {
-			s.storage = s.localStorage
-		}
+		_ = s.applyStorageSettings(r.Context())
 	}
 	writeJSON(w, 200, map[string]any{"key": key, "value": redactSetting(key, value)})
 }
@@ -571,8 +589,15 @@ func validateSettingGroup(key string, value map[string]any) error {
 			return errors.New("default_language must be zh-CN or en-US")
 		}
 	case "storage":
-		if backend, ok := value["backend"].(string); ok && backend != "local" && backend != "telegram" {
-			return errors.New("storage backend must be local or telegram")
+		if backend, ok := value["backend"].(string); ok && backend != "local" && backend != "telegram" && backend != "s3" {
+			return errors.New("storage backend must be local, telegram, or s3")
+		}
+		if backend, _ := value["backend"].(string); backend == "s3" {
+			for _, field := range []string{"s3_region", "s3_bucket", "s3_access_key", "s3_secret_key"} {
+				if strings.TrimSpace(fmt.Sprint(value[field])) == "" || fmt.Sprint(value[field]) == "<nil>" {
+					return fmt.Errorf("%s is required for S3 storage", field)
+				}
+			}
 		}
 	case "email":
 		if security, ok := value["smtp_security"].(string); ok && security != "starttls" && security != "tls" && security != "plain" {
@@ -603,6 +628,9 @@ func validateSettingGroup(key string, value map[string]any) error {
 }
 
 func (s *server) storageFor(backend string) imagehub.Storage {
+	if backend == "s3" && s.s3Storage != nil {
+		return s.s3Storage
+	}
 	if backend == "telegram" && s.telegramStorage != nil {
 		return s.telegramStorage
 	}
@@ -612,12 +640,59 @@ func (s *server) storageFor(backend string) imagehub.Storage {
 	return s.storage
 }
 
+func (s *server) storageFromSettings(value map[string]any) (imagehub.Storage, error) {
+	backend, _ := value["backend"].(string)
+	switch backend {
+	case "local", "":
+		return s.localStorage, nil
+	case "telegram":
+		chatID := strings.TrimSpace(fmt.Sprint(value["telegram_chat_id"]))
+		if chatID == "" || chatID == "<nil>" {
+			chatID = s.cfg.TelegramChatID
+		}
+		if s.cfg.TelegramToken == "" || chatID == "" {
+			return nil, errors.New("Telegram storage requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+		}
+		if s.telegramStorage == nil {
+			s.telegramStorage = imagehub.NewTelegramStorage(s.cfg.TelegramToken, chatID)
+		}
+		return s.telegramStorage, nil
+	case "s3":
+		secret, err := decryptSecret(s.cfg.AppSecret, fmt.Sprint(value["s3_secret_key"]))
+		if err != nil {
+			return nil, err
+		}
+		storage, err := imagehub.NewS3Storage(fmt.Sprint(value["s3_endpoint"]), fmt.Sprint(value["s3_region"]), fmt.Sprint(value["s3_bucket"]), fmt.Sprint(value["s3_access_key"]), secret, fmt.Sprint(value["s3_prefix"]), value["s3_path_style"] == true)
+		if err != nil {
+			return nil, err
+		}
+		return storage, nil
+	default:
+		return nil, errors.New("unsupported storage backend")
+	}
+}
+
+func (s *server) applyStorageSettings(ctx context.Context) error {
+	if s.db == nil {
+		return nil
+	}
+	storage, err := s.storageFromSettings(s.settings(ctx, "storage"))
+	if err != nil {
+		return err
+	}
+	s.storage = storage
+	if backend, _ := s.settings(ctx, "storage")["backend"].(string); backend == "s3" {
+		s.s3Storage = storage
+	}
+	return nil
+}
+
 func (s *server) configuredStorage() imagehub.Storage {
 	backend, _ := s.settings(context.Background(), "storage")["backend"].(string)
 	return s.storageFor(backend)
 }
 func (s *server) featureStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"storage_backends": []string{"local", "telegram"}, "media": []string{"svg", "gif", "video", "remote_url"}, "teams": true, "billing": true, "cdn": true, "custom_domains": true, "oidc": s.settings(r.Context(), "oidc")})
+	writeJSON(w, 200, map[string]any{"storage_backends": []string{"local", "telegram", "s3"}, "media": []string{"svg", "gif", "video", "remote_url"}, "teams": true, "billing": true, "cdn": true, "custom_domains": true, "oidc": s.settings(r.Context(), "oidc")})
 }
 
 func (s *server) updateUserPolicy(w http.ResponseWriter, r *http.Request) {
@@ -1065,6 +1140,13 @@ func (s *server) settings(ctx context.Context, key string) map[string]any {
 			if encrypted, ok := result["smtp_password"].(string); ok && (strings.HasPrefix(encrypted, "enc:") || strings.HasPrefix(encrypted, "plain:")) {
 				if decrypted, err := decryptSecret(s.cfg.AppSecret, encrypted); err == nil {
 					result["smtp_password"] = decrypted
+				}
+			}
+		}
+		if key == "storage" {
+			if encrypted, ok := result["s3_secret_key"].(string); ok && (strings.HasPrefix(encrypted, "enc:") || strings.HasPrefix(encrypted, "plain:")) {
+				if decrypted, err := decryptSecret(s.cfg.AppSecret, encrypted); err == nil {
+					result["s3_secret_key"] = decrypted
 				}
 			}
 		}
