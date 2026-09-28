@@ -169,12 +169,12 @@ func (s *server) mediaThumbnail(w http.ResponseWriter, r *http.Request) {
 	}
 	// Thumbnail files use the same backend as the original image. This keeps
 	// media readable after an administrator changes the active storage backend.
-	var backend string
-	if err := s.db.QueryRow(r.Context(), `SELECT storage_backend FROM images WHERE id=$1 AND deleted_at IS NULL`, r.PathValue("id")).Scan(&backend); err != nil {
+	var backend, channelID string
+	if err := s.db.QueryRow(r.Context(), `SELECT storage_backend,COALESCE(storage_channel,'') FROM images WHERE id=$1 AND deleted_at IS NULL`, r.PathValue("id")).Scan(&backend, &channelID); err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	reader, err := s.storageFor(backend).Open(r.Context(), key)
+	reader, err := s.storageForChannel(backend, channelID).Open(r.Context(), key)
 	if err != nil {
 		http.Error(w, "thumbnail unavailable", 502)
 		return

@@ -61,11 +61,11 @@ func (s *server) runMediaJob(ctx context.Context, imageID, kind string) error {
 	if kind != "video_inspect" && kind != "video_thumbnail" {
 		return fmt.Errorf("unsupported media job %q", kind)
 	}
-	var key, backend, name, mimeType string
-	if err := s.db.QueryRow(ctx, `SELECT object_key,storage_backend,original_name,mime_type FROM images WHERE id=$1 AND deleted_at IS NULL`, imageID).Scan(&key, &backend, &name, &mimeType); err != nil {
+	var key, backend, channelID, name, mimeType string
+	if err := s.db.QueryRow(ctx, `SELECT object_key,storage_backend,COALESCE(storage_channel,''),original_name,mime_type FROM images WHERE id=$1 AND deleted_at IS NULL`, imageID).Scan(&key, &backend, &channelID, &name, &mimeType); err != nil {
 		return err
 	}
-	r, err := s.storageFor(backend).Open(ctx, key)
+	r, err := s.storageForChannel(backend, channelID).Open(ctx, key)
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func (s *server) runMediaJob(ctx context.Context, imageID, kind string) error {
 	thumbKey := ""
 	if len(inspection.Thumbnail) > 0 {
 		thumbKey = key + ".thumb.jpg"
-		if _, err = s.storageFor(backend).Put(ctx, thumbKey, bytes.NewReader(inspection.Thumbnail), int64(len(inspection.Thumbnail)), "image/jpeg"); err != nil {
+		if _, err = s.storageForChannel(backend, channelID).Put(ctx, thumbKey, bytes.NewReader(inspection.Thumbnail), int64(len(inspection.Thumbnail)), "image/jpeg"); err != nil {
 			return err
 		}
 	}

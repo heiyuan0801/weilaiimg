@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Header } from '@/components/layout/header'
 import { Main } from '@/components/layout/main'
-import { imageHubFetch, listTeams, updateImageVisibility, uploadImage, type Team } from '@/lib/imagehub-api'
+import { imageHubFetch, listStorageChannels, listTeams, updateImageVisibility, uploadImage, type StorageChannel, type Team } from '@/lib/imagehub-api'
 import { useI18n } from '@/lib/i18n'
 
 type ImageRecord = { id: string; name: string; mime_type: string; size_bytes: number; url: string; thumbnail_url?: string; created_at: string; status?: string; visibility?: 'private' | 'public' | 'link' }
@@ -27,11 +27,17 @@ export function ImageLibrary() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [teams, setTeams] = useState<Team[]>([])
   const [teamId, setTeamId] = useState('')
+  const [storageChannels, setStorageChannels] = useState<StorageChannel[]>([])
+  const [storageChannel, setStorageChannel] = useState('')
   const input = useRef<HTMLInputElement>(null)
   const load = useCallback(() => imageHubFetch<ImageRecord[]>('/api/v1/images').then((items) => { setImages(items); setPage(1); setSelectedIds(new Set()) }).catch((error) => toast.error(error instanceof Error ? error.message : 'Could not load images')), [])
-  useEffect(() => { void load(); void listTeams().then(setTeams).catch(() => undefined) }, [load])
+  useEffect(() => {
+    void load()
+    void listTeams().then(setTeams).catch(() => undefined)
+    void listStorageChannels().then((items) => { setStorageChannels(items); setStorageChannel((current) => current || items.find((item) => item.is_default)?.id || items[0]?.id || '') }).catch(() => undefined)
+  }, [load])
   async function upload(file: File) {
-    await uploadImage(file, { teamId: teamId || undefined })
+    await uploadImage(file, { teamId: teamId || undefined, storageChannel: storageChannel || undefined })
   }
   async function uploadFiles(files: File[]) {
     if (!files.length) return; setBusy(true)
@@ -43,7 +49,7 @@ export function ImageLibrary() {
   }
   async function importRemote() {
     if (!remoteURL.trim()) return; setBusy(true)
-    try { await imageHubFetch('/api/v1/images/import-url', { method: 'POST', body: JSON.stringify({ url: remoteURL.trim(), ...(teamId ? { team_id: teamId } : {}) }) }); setRemoteURL(''); toast.success('Remote file imported'); await load() } catch (error) { toast.error(error instanceof Error ? error.message : 'Import failed') } finally { setBusy(false) }
+    try { await imageHubFetch('/api/v1/images/import-url', { method: 'POST', body: JSON.stringify({ url: remoteURL.trim(), ...(teamId ? { team_id: teamId } : {}), ...(storageChannel ? { storage_channel: storageChannel } : {}) }) }); setRemoteURL(''); toast.success('Remote file imported'); await load() } catch (error) { toast.error(error instanceof Error ? error.message : 'Import failed') } finally { setBusy(false) }
   }
   function toggleSelected(id: string, checked: boolean) {
     setSelectedIds((current) => {
@@ -107,7 +113,7 @@ export function ImageLibrary() {
   return <>
     <Header fixed><h1 className='text-lg font-semibold'>{t('images.title')}</h1></Header>
     <Main className='space-y-6'>
-      <div className='flex flex-wrap items-end justify-between gap-3'><div><h1 className='text-2xl font-bold tracking-tight'>{t('images.title')}</h1><p className='text-muted-foreground'>{t('images.description')}</p></div><div className='flex gap-2'>{teams.length > 0 && <select className='h-9 rounded-md border bg-background px-3 text-sm' value={teamId} onChange={(event) => setTeamId(event.target.value)}><option value=''>Personal library</option>{teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select>}<Button variant='outline' onClick={load} disabled={busy}><RefreshCw className='me-2 h-4 w-4' />Refresh</Button></div></div>
+      <div className='flex flex-wrap items-end justify-between gap-3'><div><h1 className='text-2xl font-bold tracking-tight'>{t('images.title')}</h1><p className='text-muted-foreground'>{t('images.description')}</p></div><div className='flex flex-wrap gap-2'>{teams.length > 0 && <select className='h-9 rounded-md border bg-background px-3 text-sm' value={teamId} onChange={(event) => setTeamId(event.target.value)}><option value=''>Personal library</option>{teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select>}{storageChannels.length > 0 && <select aria-label='Storage channel' className='h-9 rounded-md border bg-background px-3 text-sm' value={storageChannel} onChange={(event) => setStorageChannel(event.target.value)}>{storageChannels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name || channel.id} ({channel.backend})</option>)}</select>}<Button variant='outline' onClick={load} disabled={busy}><RefreshCw className='me-2 h-4 w-4' />Refresh</Button></div></div>
       <div className='grid gap-6 lg:grid-cols-2'>
         <Card><CardHeader><CardTitle>{t('images.upload')}</CardTitle><CardDescription>{t('images.uploadDescription')}</CardDescription></CardHeader><CardContent><button type='button' disabled={busy} onClick={() => input.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void uploadFiles(Array.from(event.dataTransfer.files)) }} className='flex w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-10 text-center transition-colors hover:bg-muted'><UploadCloud className='h-8 w-8 text-muted-foreground' /><span className='font-medium'>{busy ? 'Working…' : t('images.choose')}</span><span className='text-sm text-muted-foreground'>JPEG, PNG, WebP, AVIF, GIF, SVG, MP4 and WebM</span></button><input ref={input} type='file' multiple hidden accept='image/*,video/mp4,video/webm' onChange={(event) => { void uploadFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} /></CardContent></Card>
         <Card><CardHeader><CardTitle>{t('images.remote')}</CardTitle><CardDescription>{t('images.remoteDescription')}</CardDescription></CardHeader><CardContent className='flex gap-2'><Input value={remoteURL} onChange={(event) => setRemoteURL(event.target.value)} placeholder='https://example.com/image.png' onKeyDown={(event) => { if (event.key === 'Enter') void importRemote() }} /><Button disabled={busy || !remoteURL.trim()} onClick={importRemote}><Link2 className='me-2 h-4 w-4' />{t('images.import')}</Button></CardContent></Card>

@@ -144,8 +144,13 @@ export function sendTestEmail(recipient: string) {
   })
 }
 
-export function testStorage() {
-  return imageHubFetch<{ ok: boolean; backend: string }>('/api/v1/admin/storage/test', { method: 'POST' })
+export type StorageChannel = { id: string; name: string; backend: string; is_default: boolean }
+export function listStorageChannels() {
+  return imageHubFetch<StorageChannel[]>('/api/v1/storage/channels')
+}
+
+export function testStorage(channelId?: string) {
+  return imageHubFetch<{ ok: boolean; backend: string; channel_id: string }>('/api/v1/admin/storage/test', { method: 'POST', body: JSON.stringify(channelId ? { channel_id: channelId } : {}) })
 }
 
 export function listTeams() {
@@ -216,8 +221,8 @@ export function acceptTeamInvitation(token: string) {
   return imageHubFetch<{ accepted: boolean; team_id: string }>(`/api/v1/team-invitations/${encodeURIComponent(token)}/accept`, { method: 'POST' })
 }
 
-export function uploadImage(file: File, options: { onProgress?: (progress: number) => void; teamId?: string } = {}) {
-  const body = new FormData(); body.append('file', file); if (options.teamId) body.append('team_id', options.teamId)
+export function uploadImage(file: File, options: { onProgress?: (progress: number) => void; teamId?: string; storageChannel?: string } = {}) {
+  const body = new FormData(); body.append('file', file); if (options.teamId) body.append('team_id', options.teamId); if (options.storageChannel) body.append('storage_channel', options.storageChannel)
   return new Promise<Record<string, unknown>>((resolve, reject) => {
     const request = new XMLHttpRequest(); request.open('POST', `${API_BASE}/api/v1/images/upload`); request.withCredentials = true
     request.upload.onprogress = (event) => { if (event.lengthComputable) options.onProgress?.(Math.round(event.loaded / event.total * 100)) }
@@ -258,8 +263,8 @@ export function uploadGuestImage(file: File, onProgress?: (progress: number) => 
   })
 }
 
-export function importImageURL(url: string, teamId?: string) {
-  return imageHubFetch<Record<string, unknown>>('/api/v1/images/import-url', { method: 'POST', body: JSON.stringify({ url, ...(teamId ? { team_id: teamId } : {}) }) })
+export function importImageURL(url: string, teamId?: string, storageChannel?: string) {
+  return imageHubFetch<Record<string, unknown>>('/api/v1/images/import-url', { method: 'POST', body: JSON.stringify({ url, ...(teamId ? { team_id: teamId } : {}), ...(storageChannel ? { storage_channel: storageChannel } : {}) }) })
 }
 
 export type OIDCProvider = { id: string; name: string; issuer_url: string; client_id: string; scopes: string[]; enabled: boolean; auto_create_users: boolean }

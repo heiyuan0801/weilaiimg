@@ -47,6 +47,9 @@ type server struct {
 	localStorage    imagehub.Storage
 	telegramStorage imagehub.Storage
 	s3Storage       imagehub.Storage
+	storageChannels map[string]imagehub.Storage
+	storageBackends map[string]string
+	defaultChannel  string
 	log             *slog.Logger
 }
 
@@ -63,7 +66,7 @@ const userKey contextKey = "user"
 func main() {
 	cfg := imagehub.LoadConfig()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	s := &server{cfg: cfg, log: logger}
+	s := &server{cfg: cfg, log: logger, storageChannels: map[string]imagehub.Storage{}, storageBackends: map[string]string{}, defaultChannel: "local"}
 	local, err := imagehub.NewLocalStorage(cfg.StorageDir)
 	if err != nil {
 		logger.Error("storage init failed", "error", err)
@@ -148,6 +151,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/images", s.requireAdmin(s.listAdminImages))
 	mux.HandleFunc("DELETE /api/v1/admin/images/{id}", s.requireAdmin(s.forceDeleteImage))
 	mux.HandleFunc("GET /api/v1/teams", s.requireAuth(s.listTeams))
+	mux.HandleFunc("GET /api/v1/storage/channels", s.requireAuth(s.listStorageChannels))
 	mux.HandleFunc("POST /api/v1/teams", s.requireAuth(s.createTeam))
 	mux.HandleFunc("GET /api/v1/teams/{id}/members", s.requireAuth(s.listTeamMembers))
 	mux.HandleFunc("GET /api/v1/teams/{id}/invitations", s.requireAuth(s.listTeamInvitations))
@@ -531,6 +535,7 @@ func (s *server) updateSetting(w http.ResponseWriter, r *http.Request) {
 					value[field] = current
 				}
 			}
+			preserveMaskedStorageSecrets(existing, value)
 		}
 	}
 	if key == "email" {
@@ -544,15 +549,11 @@ func (s *server) updateSetting(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if key == "storage" {
-		if secret, ok := value["s3_secret_key"].(string); ok && secret != "" && secret != "********" && !strings.HasPrefix(secret, "enc:") && !strings.HasPrefix(secret, "plain:") {
-			if encrypted, encErr := encryptSecret(s.cfg.AppSecret, secret); encErr == nil {
-				value["s3_secret_key"] = encrypted
-			} else {
-				writeErr(w, 500, "SETTINGS_SAVE_FAILED", "could not protect S3 secret key")
-				return
-			}
+		if err := protectStorageSecrets(s.cfg.AppSecret, value); err != nil {
+			writeErr(w, 500, "SETTINGS_SAVE_FAILED", err.Error())
+			return
 		}
-		if _, err := s.storageFromSettings(value); err != nil {
+		if _, _, _, err := s.buildStorageChannels(value); err != nil {
 			writeErr(w, http.StatusBadRequest, "STORAGE_UNAVAILABLE", err.Error())
 			return
 		}
@@ -569,8 +570,11 @@ func (s *server) updateSetting(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) testStorage(w http.ResponseWriter, r *http.Request) {
-	storageSettings := s.settings(r.Context(), "storage")
-	storage, err := s.storageFromSettings(storageSettings)
+	var in struct {
+		ChannelID string `json:"channel_id"`
+	}
+	_ = decodeJSON(r, &in)
+	storage, channelID, err := s.configuredStorageChannel(strings.TrimSpace(in.ChannelID))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "STORAGE_UNAVAILABLE", err.Error())
 		return
@@ -585,7 +589,7 @@ func (s *server) testStorage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "STORAGE_TEST_FAILED", "storage delete test failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "backend": stored.Backend})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "backend": stored.Backend, "channel_id": channelID})
 }
 
 func (s *server) testEmail(w http.ResponseWriter, r *http.Request) {
@@ -610,6 +614,37 @@ func validateSettingGroup(key string, value map[string]any) error {
 			return errors.New("default_language must be zh-CN or en-US")
 		}
 	case "storage":
+		if raw, ok := value["channels"].([]any); ok {
+			if len(raw) == 0 {
+				return errors.New("at least one storage channel is required")
+			}
+			seen := map[string]bool{}
+			for _, item := range raw {
+				channel, ok := item.(map[string]any)
+				if !ok {
+					return errors.New("storage channels must be objects")
+				}
+				id := strings.TrimSpace(fmt.Sprint(channel["id"]))
+				if id == "" || seen[id] {
+					return errors.New("storage channel ids must be unique and non-empty")
+				}
+				seen[id] = true
+				backend := strings.TrimSpace(fmt.Sprint(channel["backend"]))
+				if backend != "local" && backend != "telegram" && backend != "s3" {
+					return errors.New("storage channel backend must be local, telegram, or s3")
+				}
+				if backend == "s3" {
+					for _, field := range []string{"s3_region", "s3_bucket", "s3_access_key", "s3_secret_key"} {
+						if strings.TrimSpace(fmt.Sprint(channel[field])) == "" || fmt.Sprint(channel[field]) == "<nil>" || fmt.Sprint(channel[field]) == "********" {
+							continue
+						}
+					}
+				}
+			}
+			if defaultID, ok := value["default_channel"].(string); ok && defaultID != "" && !seen[defaultID] {
+				return errors.New("default storage channel does not exist")
+			}
+		}
 		if backend, ok := value["backend"].(string); ok && backend != "local" && backend != "telegram" && backend != "s3" {
 			return errors.New("storage backend must be local, telegram, or s3")
 		}
@@ -661,6 +696,15 @@ func (s *server) storageFor(backend string) imagehub.Storage {
 	return s.storage
 }
 
+func (s *server) storageForChannel(backend, channelID string) imagehub.Storage {
+	if channelID != "" {
+		if storage := s.storageChannels[channelID]; storage != nil {
+			return storage
+		}
+	}
+	return s.storageFor(backend)
+}
+
 func (s *server) storageFromSettings(value map[string]any) (imagehub.Storage, error) {
 	backend, _ := value["backend"].(string)
 	switch backend {
@@ -695,20 +739,128 @@ func (s *server) applyStorageSettings(ctx context.Context) error {
 	if s.db == nil {
 		return nil
 	}
-	storage, err := s.storageFromSettings(s.settings(ctx, "storage"))
+	channels, backends, defaultID, err := s.buildStorageChannels(s.settings(ctx, "storage"))
 	if err != nil {
 		return err
 	}
-	s.storage = storage
-	if backend, _ := s.settings(ctx, "storage")["backend"].(string); backend == "s3" {
-		s.s3Storage = storage
+	s.storageChannels, s.storageBackends, s.defaultChannel = channels, backends, defaultID
+	s.storage = channels[defaultID]
+	if s.storage == nil {
+		return errors.New("default storage channel is unavailable")
+	}
+	if s.storageBackends[defaultID] == "s3" {
+		s.s3Storage = s.storage
 	}
 	return nil
 }
 
 func (s *server) configuredStorage() imagehub.Storage {
-	backend, _ := s.settings(context.Background(), "storage")["backend"].(string)
-	return s.storageFor(backend)
+	storage, _, err := s.configuredStorageChannel("")
+	if err != nil {
+		return s.storage
+	}
+	return storage
+}
+
+func (s *server) configuredStorageChannel(requested string) (imagehub.Storage, string, error) {
+	if len(s.storageChannels) == 0 && s.db != nil {
+		if err := s.applyStorageSettings(context.Background()); err != nil {
+			return nil, "", err
+		}
+	}
+	if requested != "" {
+		if storage := s.storageChannels[requested]; storage != nil {
+			return storage, requested, nil
+		}
+		return nil, "", errors.New("storage channel is disabled or does not exist")
+	}
+	channelID := s.defaultChannel
+	if channelID == "" {
+		channelID = "local"
+	}
+	if storage := s.storageChannels[channelID]; storage != nil {
+		return storage, channelID, nil
+	}
+	return s.storage, channelID, nil
+}
+
+func (s *server) buildStorageChannels(value map[string]any) (map[string]imagehub.Storage, map[string]string, string, error) {
+	channels := map[string]imagehub.Storage{}
+	backends := map[string]string{}
+	defaultID := ""
+	if raw, ok := value["channels"].([]any); ok && len(raw) > 0 {
+		for _, item := range raw {
+			channel, ok := item.(map[string]any)
+			if !ok {
+				return nil, nil, "", errors.New("storage channel must be an object")
+			}
+			enabled, exists := channel["enabled"].(bool)
+			if exists && !enabled {
+				continue
+			}
+			id := strings.TrimSpace(fmt.Sprint(channel["id"]))
+			if id == "" {
+				return nil, nil, "", errors.New("storage channel id is required")
+			}
+			backend := strings.TrimSpace(fmt.Sprint(channel["backend"]))
+			if backend == "" {
+				backend = "local"
+			}
+			storage, err := s.storageFromSettings(channel)
+			if err != nil {
+				return nil, nil, "", fmt.Errorf("channel %s: %w", id, err)
+			}
+			channels[id], backends[id] = storage, backend
+			if defaultID == "" {
+				defaultID = id
+			}
+		}
+		if requested, ok := value["default_channel"].(string); ok && channels[requested] != nil {
+			defaultID = requested
+		}
+	} else {
+		backend, _ := value["backend"].(string)
+		if backend == "" {
+			backend = "local"
+		}
+		storage, err := s.storageFromSettings(value)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		defaultID, channels[backend], backends[backend] = backend, storage, backend
+	}
+	if len(channels) == 0 {
+		return nil, nil, "", errors.New("no enabled storage channels")
+	}
+	return channels, backends, defaultID, nil
+}
+
+func (s *server) listStorageChannels(w http.ResponseWriter, r *http.Request) {
+	settings := s.settings(r.Context(), "storage")
+	result := []map[string]any{}
+	if raw, ok := settings["channels"].([]any); ok {
+		defaultID, _ := settings["default_channel"].(string)
+		for _, item := range raw {
+			if channel, ok := item.(map[string]any); ok {
+				enabled, exists := channel["enabled"].(bool)
+				if exists && !enabled {
+					continue
+				}
+				id := strings.TrimSpace(fmt.Sprint(channel["id"]))
+				if id == "" {
+					continue
+				}
+				result = append(result, map[string]any{"id": id, "name": fmt.Sprint(channel["name"]), "backend": fmt.Sprint(channel["backend"]), "is_default": id == defaultID})
+			}
+		}
+	} else {
+		backend, _ := settings["backend"].(string)
+		if backend == "" {
+			backend = "local"
+		}
+		result = append(result, map[string]any{"id": backend, "name": backend, "backend": backend, "is_default": true})
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 func (s *server) featureStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"storage_backends": []string{"local", "telegram", "s3"}, "media": []string{"svg", "gif", "video", "remote_url"}, "teams": true, "billing": true, "cdn": true, "custom_domains": true, "oidc": s.settings(r.Context(), "oidc")})
@@ -802,7 +954,7 @@ func (s *server) listAdminImages(w http.ResponseWriter, r *http.Request) {
 	if value, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && value > 0 && value < 1000 {
 		limit = value
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT i.id,i.original_name,i.content_hash,i.mime_type,i.size_bytes,COALESCE(i.width,0),COALESCE(i.height,0),i.storage_backend,COALESCE(i.owner_id::text,''),COALESCE(u.email,''),COALESCE(i.thumbnail_object_key,''),i.created_at,(SELECT count(*) FROM images ref WHERE ref.object_key=i.object_key AND ref.deleted_at IS NULL) FROM images i LEFT JOIN users u ON u.id=i.owner_id WHERE i.deleted_at IS NULL AND ($1='' OR i.original_name ILIKE '%'||$1||'%' OR i.content_hash ILIKE '%'||$1||'%' OR COALESCE(u.email,'') ILIKE '%'||$1||'%') AND ($2='' OR i.mime_type=$2) ORDER BY i.created_at DESC LIMIT $3`, query, mimeFilter, limit)
+	rows, err := s.db.Query(r.Context(), `SELECT i.id,i.original_name,i.content_hash,i.mime_type,i.size_bytes,COALESCE(i.width,0),COALESCE(i.height,0),i.storage_backend,COALESCE(i.storage_channel,''),COALESCE(i.owner_id::text,''),COALESCE(u.email,''),COALESCE(i.thumbnail_object_key,''),i.created_at,(SELECT count(*) FROM images ref WHERE ref.object_key=i.object_key AND ref.deleted_at IS NULL) FROM images i LEFT JOIN users u ON u.id=i.owner_id WHERE i.deleted_at IS NULL AND ($1='' OR i.original_name ILIKE '%'||$1||'%' OR i.content_hash ILIKE '%'||$1||'%' OR COALESCE(u.email,'') ILIKE '%'||$1||'%') AND ($2='' OR i.mime_type=$2) ORDER BY i.created_at DESC LIMIT $3`, query, mimeFilter, limit)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "ADMIN_IMAGES_FAILED", "could not load images")
 		return
@@ -810,11 +962,11 @@ func (s *server) listAdminImages(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	result := []map[string]any{}
 	for rows.Next() {
-		var id, name, hash, mimeType, backend, ownerID, ownerEmail, thumbnailKey string
+		var id, name, hash, mimeType, backend, channelID, ownerID, ownerEmail, thumbnailKey string
 		var size, width, height, references int64
 		var created time.Time
-		if rows.Scan(&id, &name, &hash, &mimeType, &size, &width, &height, &backend, &ownerID, &ownerEmail, &thumbnailKey, &created, &references) == nil {
-			item := map[string]any{"id": id, "name": name, "content_hash": hash, "mime_type": mimeType, "size_bytes": size, "width": width, "height": height, "storage_backend": backend, "owner_id": ownerID, "owner_email": ownerEmail, "references": references, "created_at": created, "url": s.resourceURL(id, "public")}
+		if rows.Scan(&id, &name, &hash, &mimeType, &size, &width, &height, &backend, &channelID, &ownerID, &ownerEmail, &thumbnailKey, &created, &references) == nil {
+			item := map[string]any{"id": id, "name": name, "content_hash": hash, "mime_type": mimeType, "size_bytes": size, "width": width, "height": height, "storage_backend": backend, "storage_channel": channelID, "owner_id": ownerID, "owner_email": ownerEmail, "references": references, "created_at": created, "url": s.resourceURL(id, "public")}
 			if thumbnailKey != "" {
 				item["thumbnail_url"] = s.resourceURL(id+"/thumbnail", "public")
 			}
@@ -825,17 +977,17 @@ func (s *server) listAdminImages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) forceDeleteImage(w http.ResponseWriter, r *http.Request) {
-	var key, backend, thumbnail string
-	if err := s.db.QueryRow(r.Context(), `UPDATE images SET deleted_at=now(),status='deleted',deleted_by=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING object_key,storage_backend,COALESCE(thumbnail_object_key,'')`, r.Context().Value(userKey).(user).ID, r.PathValue("id")).Scan(&key, &backend, &thumbnail); err != nil {
+	var key, backend, channelID, thumbnail string
+	if err := s.db.QueryRow(r.Context(), `UPDATE images SET deleted_at=now(),status='deleted',deleted_by=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING object_key,storage_backend,COALESCE(storage_channel,''),COALESCE(thumbnail_object_key,'')`, r.Context().Value(userKey).(user).ID, r.PathValue("id")).Scan(&key, &backend, &channelID, &thumbnail); err != nil {
 		writeErr(w, http.StatusNotFound, "IMAGE_NOT_FOUND", "image not found")
 		return
 	}
 	var references int
 	_ = s.db.QueryRow(r.Context(), `SELECT count(*) FROM images WHERE object_key=$1 AND deleted_at IS NULL`, key).Scan(&references)
 	if references == 0 {
-		_ = s.storageFor(backend).Delete(r.Context(), key)
+		_ = s.storageForChannel(backend, channelID).Delete(r.Context(), key)
 		if thumbnail != "" {
-			_ = s.storageFor(backend).Delete(r.Context(), thumbnail)
+			_ = s.storageForChannel(backend, channelID).Delete(r.Context(), thumbnail)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "physical_deleted": references == 0})
@@ -1163,11 +1315,7 @@ func (s *server) settings(ctx context.Context, key string) map[string]any {
 			}
 		}
 		if key == "storage" {
-			if encrypted, ok := result["s3_secret_key"].(string); ok && (strings.HasPrefix(encrypted, "enc:") || strings.HasPrefix(encrypted, "plain:")) {
-				if decrypted, err := decryptSecret(s.cfg.AppSecret, encrypted); err == nil {
-					result["s3_secret_key"] = decrypted
-				}
-			}
+			decryptStorageSecrets(s.cfg.AppSecret, result)
 		}
 	}
 	return result
@@ -1180,19 +1328,106 @@ func redactSetting(key string, value any) any {
 	if !ok {
 		return value
 	}
-	out := map[string]any{}
-	for k, v := range m {
-		if strings.Contains(strings.ToLower(k), "password") || strings.Contains(strings.ToLower(k), "secret") || strings.Contains(strings.ToLower(k), "token") {
-			if v != nil && fmt.Sprint(v) != "" {
-				out[k] = "********"
+	return redactSecrets(m)
+}
+
+func redactSecrets(value any) any {
+	switch current := value.(type) {
+	case map[string]any:
+		out := map[string]any{}
+		for k, v := range current {
+			lower := strings.ToLower(k)
+			if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "token") {
+				if v != nil && fmt.Sprint(v) != "" {
+					out[k] = "********"
+				} else {
+					out[k] = ""
+				}
 			} else {
-				out[k] = ""
+				out[k] = redactSecrets(v)
 			}
-		} else {
-			out[k] = v
+		}
+		return out
+	case []any:
+		out := make([]any, len(current))
+		for i, item := range current {
+			out[i] = redactSecrets(item)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func protectStorageSecrets(appSecret string, value map[string]any) error {
+	protect := func(channel map[string]any) error {
+		secret, ok := channel["s3_secret_key"].(string)
+		if !ok || secret == "" || secret == "********" || strings.HasPrefix(secret, "enc:") || strings.HasPrefix(secret, "plain:") {
+			return nil
+		}
+		encrypted, err := encryptSecret(appSecret, secret)
+		if err != nil {
+			return err
+		}
+		channel["s3_secret_key"] = encrypted
+		return nil
+	}
+	if err := protect(value); err != nil {
+		return errors.New("could not protect S3 secret key")
+	}
+	if raw, ok := value["channels"].([]any); ok {
+		for _, item := range raw {
+			if channel, ok := item.(map[string]any); ok {
+				if err := protect(channel); err != nil {
+					return errors.New("could not protect S3 secret key")
+				}
+			}
 		}
 	}
-	return out
+	return nil
+}
+
+func preserveMaskedStorageSecrets(existing, incoming map[string]any) {
+	oldChannels, oldOK := existing["channels"].([]any)
+	newChannels, newOK := incoming["channels"].([]any)
+	if !oldOK || !newOK {
+		return
+	}
+	byID := map[string]map[string]any{}
+	for _, item := range oldChannels {
+		if channel, ok := item.(map[string]any); ok {
+			byID[fmt.Sprint(channel["id"])] = channel
+		}
+	}
+	for _, item := range newChannels {
+		if channel, ok := item.(map[string]any); ok {
+			if old := byID[fmt.Sprint(channel["id"])]; old != nil {
+				for _, field := range []string{"s3_secret_key"} {
+					if channel[field] == "********" && old[field] != nil {
+						channel[field] = old[field]
+					}
+				}
+			}
+		}
+	}
+}
+
+func decryptStorageSecrets(appSecret string, value map[string]any) {
+	decrypt := func(channel map[string]any) {
+		if encrypted, ok := channel["s3_secret_key"].(string); ok && (strings.HasPrefix(encrypted, "enc:") || strings.HasPrefix(encrypted, "plain:")) {
+			if decrypted, err := decryptSecret(appSecret, encrypted); err == nil {
+				channel["s3_secret_key"] = decrypted
+			}
+		}
+	}
+	decrypt(value)
+	if raw, ok := value["channels"].([]any); ok {
+		for _, item := range raw {
+			if channel, ok := item.(map[string]any); ok {
+				decrypt(channel)
+			}
+		}
+	}
 }
 
 func (s *server) upload(w http.ResponseWriter, r *http.Request) {
@@ -1204,6 +1439,7 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	teamID := strings.TrimSpace(r.FormValue("team_id"))
+	storageChannel := strings.TrimSpace(r.FormValue("storage_channel"))
 	if teamID != "" {
 		if _, ok := s.teamRole(r, teamID); !ok {
 			writeErr(w, 403, "TEAM_ACCESS_DENIED", "team membership is required")
@@ -1252,7 +1488,7 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 415, "INVALID_SVG", "file is not a valid SVG document")
 		return
 	}
-	id, err := s.persistImage(r.Context(), u.ID, header.Filename, mimeType, data, teamID)
+	id, err := s.persistImage(r.Context(), u.ID, header.Filename, mimeType, data, storageChannel, teamID)
 	if err != nil {
 		s.releaseStore(r.Context(), u.ID, int64(len(data)))
 		if teamID != "" {
@@ -1326,7 +1562,7 @@ func (s *server) guestUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusRequestEntityTooLarge, "GUEST_QUOTA_EXCEEDED", "guest daily storage limit reached")
 		return
 	}
-	result, err := s.persistImage(r.Context(), "", header.Filename, mimeType, data)
+	result, err := s.persistImage(r.Context(), "", header.Filename, mimeType, data, "")
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "UPLOAD_FAILED", err.Error())
 		return
@@ -1429,8 +1665,9 @@ func (s *server) guestBytesAllowed(r *http.Request, settings map[string]any, siz
 func (s *server) importURL(w http.ResponseWriter, r *http.Request) {
 	u := r.Context().Value(userKey).(user)
 	var in struct {
-		URL    string `json:"url"`
-		TeamID string `json:"team_id"`
+		URL            string `json:"url"`
+		TeamID         string `json:"team_id"`
+		StorageChannel string `json:"storage_channel"`
 	}
 	uploadSettings := s.effectiveUploadSettings(r.Context(), u.ID)
 	if enabled, ok := uploadSettings["allow_remote_url"].(bool); ok && !enabled {
@@ -1504,7 +1741,7 @@ func (s *server) importURL(w http.ResponseWriter, r *http.Request) {
 	if name == "." || name == "/" || name == "" {
 		name = "remote-upload"
 	}
-	id, err := s.persistImage(r.Context(), u.ID, name, mimeType, data, in.TeamID)
+	id, err := s.persistImage(r.Context(), u.ID, name, mimeType, data, in.StorageChannel, in.TeamID)
 	if err != nil {
 		s.releaseStore(r.Context(), u.ID, int64(len(data)))
 		if in.TeamID != "" {
@@ -1547,7 +1784,7 @@ func (s *server) safeHTTPClient() *http.Client {
 	return &http.Client{Timeout: 20 * time.Second, Transport: transport}
 }
 
-func (s *server) persistImage(ctx context.Context, ownerID, name, mimeType string, data []byte, teamIDs ...string) (map[string]any, error) {
+func (s *server) persistImage(ctx context.Context, ownerID, name, mimeType string, data []byte, storageChannel string, teamIDs ...string) (map[string]any, error) {
 	teamID := ""
 	if len(teamIDs) > 0 {
 		teamID = teamIDs[0]
@@ -1557,19 +1794,26 @@ func (s *server) persistImage(ctx context.Context, ownerID, name, mimeType strin
 	ext := extension(name, mimeType)
 	uploadSettings := s.effectiveUploadSettings(ctx, ownerID)
 	key := objectKeyForUpload(uploadSettings, ownerID, name, mimeType, data, hash, time.Now().UTC())
-	backendStorage := s.configuredStorage()
-	stored := imagehub.StoredObject{Key: key, Backend: ""}
+	backendStorage, channelID, err := s.configuredStorageChannel(strings.TrimSpace(storageChannel))
+	if err != nil {
+		return nil, err
+	}
+	backendName := s.storageBackends[channelID]
+	if backendName == "" {
+		backendName = "local"
+	}
+	stored := imagehub.StoredObject{Key: key, Backend: backendName}
 	deduplicated := false
-	var err error
 	var existingWidth, existingHeight int
 	var existingDuration float64
-	var existingStatus, existingProcessingError, existingThumbnailKey, existingBackend string
+	var existingStatus, existingProcessingError, existingThumbnailKey, existingBackend, existingChannel string
 	var existingMetadata []byte
 	if s.db != nil {
-		err = s.db.QueryRow(ctx, `SELECT object_key,storage_backend,COALESCE(width,0),COALESCE(height,0),COALESCE(duration_seconds::float8,0),status,COALESCE(thumbnail_object_key,''),COALESCE(processing_error,''),metadata FROM images WHERE content_hash=$1 AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1`, hash).Scan(&stored.Key, &existingBackend, &existingWidth, &existingHeight, &existingDuration, &existingStatus, &existingThumbnailKey, &existingProcessingError, &existingMetadata)
+		err = s.db.QueryRow(ctx, `SELECT object_key,storage_backend,COALESCE(storage_channel,''),COALESCE(width,0),COALESCE(height,0),COALESCE(duration_seconds::float8,0),status,COALESCE(thumbnail_object_key,''),COALESCE(processing_error,''),metadata FROM images WHERE content_hash=$1 AND deleted_at IS NULL AND (storage_channel=$2 OR (storage_channel='' AND storage_backend=$3)) ORDER BY created_at ASC LIMIT 1`, hash, channelID, backendName).Scan(&stored.Key, &existingBackend, &existingChannel, &existingWidth, &existingHeight, &existingDuration, &existingStatus, &existingThumbnailKey, &existingProcessingError, &existingMetadata)
 		if err == nil {
 			stored.Backend = existingBackend
-			backendStorage = s.storageFor(existingBackend)
+			channelID = existingChannel
+			backendStorage = s.storageForChannel(existingBackend, existingChannel)
 			deduplicated = true
 		}
 	}
@@ -1580,7 +1824,7 @@ func (s *server) persistImage(ctx context.Context, ownerID, name, mimeType strin
 		}
 	}
 	if s.db == nil {
-		return map[string]any{"object_key": stored.Key, "storage_backend": stored.Backend, "content_hash": hash}, nil
+		return map[string]any{"object_key": stored.Key, "storage_backend": stored.Backend, "storage_channel": channelID, "content_hash": hash}, nil
 	}
 	video := inspectVideo(ctx, name, mimeType, data)
 	thumbnailKey := ""
@@ -1621,7 +1865,7 @@ func (s *server) persistImage(ctx context.Context, ownerID, name, mimeType strin
 	}
 	metadata, _ := json.Marshal(video.Metadata)
 	var id string
-	err = s.db.QueryRow(ctx, `INSERT INTO images(owner_id,team_id,object_key,storage_backend,original_name,content_hash,mime_type,extension,size_bytes,width,height,duration_seconds,status,thumbnail_object_key,processing_error,metadata) VALUES(NULLIF($1,'')::uuid,NULLIF($2,'')::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NULLIF($15,''),$16) RETURNING id`, ownerID, teamID, stored.Key, stored.Backend, name, hash, mimeType, ext, len(data), video.Width, video.Height, video.Duration, video.Status, thumbnailKey, video.Error, metadata).Scan(&id)
+	err = s.db.QueryRow(ctx, `INSERT INTO images(owner_id,team_id,object_key,storage_backend,storage_channel,original_name,content_hash,mime_type,extension,size_bytes,width,height,duration_seconds,status,thumbnail_object_key,processing_error,metadata) VALUES(NULLIF($1,'')::uuid,NULLIF($2,'')::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NULLIF($16,''),$17) RETURNING id`, ownerID, teamID, stored.Key, stored.Backend, channelID, name, hash, mimeType, ext, len(data), video.Width, video.Height, video.Duration, video.Status, thumbnailKey, video.Error, metadata).Scan(&id)
 	if err != nil {
 		if !deduplicated {
 			_ = backendStorage.Delete(ctx, stored.Key)
@@ -1634,7 +1878,7 @@ func (s *server) persistImage(ctx context.Context, ownerID, name, mimeType strin
 	if strings.HasPrefix(mimeType, "video/") && video.Error != "" {
 		s.enqueueMediaJob(ctx, id, "video_inspect")
 	}
-	result := map[string]any{"id": id, "url": s.resourceURL(id, "private"), "object_key": stored.Key, "storage_backend": stored.Backend, "content_hash": hash, "status": video.Status, "metadata": video.Metadata, "deduplicated": deduplicated}
+	result := map[string]any{"id": id, "url": s.resourceURL(id, "private"), "object_key": stored.Key, "storage_backend": stored.Backend, "storage_channel": channelID, "content_hash": hash, "status": video.Status, "metadata": video.Metadata, "deduplicated": deduplicated}
 	if code, codeErr := s.createShortLink(ctx, id); codeErr == nil {
 		result["short_url"] = strings.TrimRight(s.cfg.PublicURL, "/") + "/s/" + code
 	}
@@ -1889,9 +2133,9 @@ func (s *server) deleteImage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 503, "DATABASE_UNAVAILABLE", "database is not configured")
 		return
 	}
-	var key, backend, thumbnail, teamID string
+	var key, backend, channelID, thumbnail, teamID string
 	var size int64
-	err := s.db.QueryRow(r.Context(), `UPDATE images SET deleted_at=now(),status='deleted',deleted_by=$3 WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL RETURNING object_key,storage_backend,size_bytes,COALESCE(thumbnail_object_key,''),COALESCE(team_id::text,'')`, r.PathValue("id"), u.ID, u.ID).Scan(&key, &backend, &size, &thumbnail, &teamID)
+	err := s.db.QueryRow(r.Context(), `UPDATE images SET deleted_at=now(),status='deleted',deleted_by=$3 WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL RETURNING object_key,storage_backend,COALESCE(storage_channel,''),size_bytes,COALESCE(thumbnail_object_key,''),COALESCE(team_id::text,'')`, r.PathValue("id"), u.ID, u.ID).Scan(&key, &backend, &channelID, &size, &thumbnail, &teamID)
 	if err != nil {
 		writeErr(w, 404, "IMAGE_NOT_FOUND", "image not found")
 		return
@@ -1899,9 +2143,9 @@ func (s *server) deleteImage(w http.ResponseWriter, r *http.Request) {
 	var references int
 	_ = s.db.QueryRow(r.Context(), `SELECT count(*) FROM images WHERE object_key=$1 AND deleted_at IS NULL`, key).Scan(&references)
 	if references == 0 {
-		_ = s.storageFor(backend).Delete(r.Context(), key)
+		_ = s.storageForChannel(backend, channelID).Delete(r.Context(), key)
 		if thumbnail != "" {
-			_ = s.storageFor(backend).Delete(r.Context(), thumbnail)
+			_ = s.storageForChannel(backend, channelID).Delete(r.Context(), thumbnail)
 		}
 	}
 	if purgeErr := s.purgeCDN(r.Context(), s.resourceURL(r.PathValue("id"), "public")); purgeErr != nil {
@@ -1911,7 +2155,7 @@ func (s *server) deleteImage(w http.ResponseWriter, r *http.Request) {
 	if teamID != "" {
 		s.releaseTeam(r.Context(), teamID, size)
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "storage_backend": backend, "released_bytes": size})
+	writeJSON(w, 200, map[string]any{"ok": true, "storage_backend": backend, "storage_channel": channelID, "released_bytes": size})
 }
 
 func (s *server) media(w http.ResponseWriter, r *http.Request) {
@@ -1923,10 +2167,10 @@ func (s *server) media(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "custom domain is not verified", http.StatusMisdirectedRequest)
 		return
 	}
-	var key, backend, mt, visibility, linkTokenHash, guestTokenHash, teamID string
+	var key, backend, channelID, mt, visibility, linkTokenHash, guestTokenHash, teamID string
 	var ownerID string
 	var guestExpiresAt *time.Time
-	err := s.db.QueryRow(r.Context(), `SELECT object_key,storage_backend,mime_type,visibility,COALESCE(owner_id::text,''),COALESCE(link_token_hash,''),COALESCE(link_token_hash,''),guest_expires_at,COALESCE(team_id::text,'') FROM images WHERE id=$1 AND deleted_at IS NULL`, r.PathValue("id")).Scan(&key, &backend, &mt, &visibility, &ownerID, &linkTokenHash, &guestTokenHash, &guestExpiresAt, &teamID)
+	err := s.db.QueryRow(r.Context(), `SELECT object_key,storage_backend,COALESCE(storage_channel,''),mime_type,visibility,COALESCE(owner_id::text,''),COALESCE(link_token_hash,''),COALESCE(link_token_hash,''),guest_expires_at,COALESCE(team_id::text,'') FROM images WHERE id=$1 AND deleted_at IS NULL`, r.PathValue("id")).Scan(&key, &backend, &channelID, &mt, &visibility, &ownerID, &linkTokenHash, &guestTokenHash, &guestExpiresAt, &teamID)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -1944,7 +2188,7 @@ func (s *server) media(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	reader, err := s.storageFor(backend).Open(r.Context(), key)
+	reader, err := s.storageForChannel(backend, channelID).Open(r.Context(), key)
 	if err != nil {
 		http.Error(w, "storage unavailable", 502)
 		return

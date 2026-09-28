@@ -119,6 +119,7 @@ CREATE INDEX IF NOT EXISTS images_owner_created_idx ON images(owner_id, created_
 CREATE INDEX IF NOT EXISTS images_hash_idx ON images(content_hash);
 CREATE INDEX IF NOT EXISTS images_team_created_idx ON images(team_id, created_at DESC);
 ALTER TABLE images ADD COLUMN IF NOT EXISTS thumbnail_object_key TEXT;
+ALTER TABLE images ADD COLUMN IF NOT EXISTS storage_channel TEXT NOT NULL DEFAULT '';
 ALTER TABLE images ADD COLUMN IF NOT EXISTS processing_error TEXT;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS deleted_by UUID REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS link_token_hash TEXT;
