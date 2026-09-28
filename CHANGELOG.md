@@ -329,3 +329,18 @@ but introduces breaking changes.
 - update sidebar logo and title
 - **ui**: remove unnecessary spacing
 - remove unused files
+## v0.1.0 (2026-09-28)
+
+首个 WeiLai ImageHub 版本。
+
+### Features
+
+- Go、PostgreSQL、Redis 与 React 一体化部署
+- 用户、团队、容量策略、媒体库和管理控制台
+- 本地、Telegram 与 S3 compatible 多存储通道
+- 上传和远程 URL 导入时选择存储通道
+- SVG、GIF、图片、视频与缩略图处理
+- 邮箱验证、密码找回、SMTP 和 OIDC 登录
+- 套餐计费、CDN、自定义域名和多语言界面
+- Docker Compose 部署、健康检查、备份与恢复脚本
+- GitHub Actions 自动构建、Release 和多架构 GHCR 镜像

@@ -1,6 +1,6 @@
 ---
 name: "\U0001F41E Bug report"
-about: Report a bug or unexpected behavior in Shadcn-Admin
+about: Report a bug or unexpected behavior in WeiLai ImageHub
 title: "[BUG]: "
 labels: bug
 assignees: ""

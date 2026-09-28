@@ -1,11 +1,11 @@
 # ImageHub deployment
 
-ImageHub ships as one Go process that serves the built React application and the `/api/v1` API. PostgreSQL stores users, teams, image metadata, settings, jobs, domains and billing events. Redis stores sessions, rate-limit counters and short-lived OIDC state. Local storage is the default; Telegram storage can be selected from System settings when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set.
+ImageHub ships as one Go process that serves the built React application and the `/api/v1` API. PostgreSQL stores users, teams, image metadata, settings, jobs, domains and billing events. Redis stores sessions, rate-limit counters and short-lived OIDC state. Local storage is the default. Administrators can configure multiple local, Telegram and S3-compatible storage channels and choose the default channel.
 
 ## Compose
 
 1. Copy `.env.example` to `.env` and replace every password, `APP_SECRET`, and bootstrap credential.
-2. Run `docker compose up -d --build`.
+2. Run `docker compose pull && docker compose up -d` to use the published image, or `docker compose up -d --build` to build locally.
 3. Open `PUBLIC_URL` and sign in with the bootstrap account. The bootstrap account is created only when the database has no users.
 4. Configure SMTP before enabling email verification or password recovery. SMTP passwords are encrypted with `APP_SECRET` before being written to PostgreSQL.
 

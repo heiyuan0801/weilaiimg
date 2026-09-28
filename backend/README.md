@@ -31,7 +31,9 @@ curl http://localhost:8080/readyz
 
 ## Storage
 
-Local storage is selected by default. To enable Telegram storage, provide `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` and select Telegram in the administrator system settings. The adapter stores the Telegram message/file reference in PostgreSQL and streams the file through the Bot API when it is requested.
+Local storage is selected by default. Administrators can create multiple local, Telegram and S3-compatible channels, enable or disable them, and choose the default. Authenticated users can select an enabled channel for uploads and remote URL imports. Each image stores its channel so reads, thumbnails, media jobs and deletes continue using the original backend after configuration changes.
+
+Telegram channels require `TELEGRAM_BOT_TOKEN` and a chat/channel ID. S3-compatible channels support an endpoint, region, bucket, access key, encrypted secret key, object prefix and path-style requests for AWS S3, MinIO and Cloudflare R2.
 
 The administrator system settings API supports registration, email verification and password recovery switches, upload policy, SMTP fields, storage/CDN, and OIDC settings. SMTP delivery, PKCE/JWKS-validated OIDC, team invitations, team quotas, Stripe Checkout/webhook reconciliation, Cloudflare purge hooks, and verified domain/TLS authorization are wired into the API. Caddy can be enabled with `docker compose --profile edge up -d`.
 

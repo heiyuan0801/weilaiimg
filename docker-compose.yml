@@ -1,7 +1,7 @@
 services:
   app:
     build: .
-    image: imagehub:local
+    image: ${IMAGEHUB_IMAGE:-ghcr.io/heiyuan0801/weilaiimg:latest}
     environment:
       DATABASE_URL: postgres://imagehub:${POSTGRES_PASSWORD:-imagehub}@postgres:5432/imagehub?sslmode=disable
       REDIS_URL: redis://:${REDIS_PASSWORD:-imagehub}@redis:6379/0
