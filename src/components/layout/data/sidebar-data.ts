@@ -31,7 +31,6 @@ export const sidebarData: SidebarData = {
       items: [
         { title: 'Dashboard', url: '/dashboard', icon: LayoutDashboard },
         { title: 'Image library', url: '/images', icon: Images },
-        { title: 'All media', url: '/admin-images', icon: Images },
         { title: 'Teams', url: '/teams', icon: UsersRound },
         { title: 'Billing', url: '/billing', icon: CreditCard },
         { title: 'Custom domains', url: '/domains', icon: Globe2 },
@@ -39,8 +38,22 @@ export const sidebarData: SidebarData = {
     },
     {
       title: 'Administration',
+      roles: ['admin'],
       items: [
+        { title: 'All media', url: '/admin-images', icon: Images },
         { title: 'Users', url: '/users', icon: Users },
+        {
+          title: 'Settings',
+          icon: Settings,
+          items: [
+            { title: 'System settings', url: '/settings/system', icon: ShieldCheck },
+          ],
+        },
+      ],
+    },
+    {
+      title: 'Personal',
+      items: [
         {
           title: 'Settings',
           icon: Settings,
@@ -50,7 +63,6 @@ export const sidebarData: SidebarData = {
             { title: 'Appearance', url: '/settings/appearance', icon: Palette },
             { title: 'Notifications', url: '/settings/notifications', icon: Bell },
             { title: 'Display', url: '/settings/display', icon: Monitor },
-            { title: 'System settings', url: '/settings/system', icon: ShieldCheck },
           ],
         },
       ],
