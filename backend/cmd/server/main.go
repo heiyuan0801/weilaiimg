@@ -139,6 +139,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/auth/oidc/providers", s.publicOIDCProviders)
 	mux.HandleFunc("GET /api/v1/admin/settings", s.requireAdmin(s.getSettings))
 	mux.HandleFunc("PATCH /api/v1/admin/settings/{key}", s.requireAdmin(s.updateSetting))
+	mux.HandleFunc("POST /api/v1/admin/storage/test", s.requireAdmin(s.testStorage))
 	mux.HandleFunc("POST /api/v1/admin/email/test", s.requireAdmin(s.testEmail))
 	mux.HandleFunc("GET /api/v1/admin/feature-status", s.requireAdmin(s.featureStatus))
 	mux.HandleFunc("PATCH /api/v1/admin/users/{id}/policy", s.requireAdmin(s.updateUserPolicy))
@@ -565,6 +566,26 @@ func (s *server) updateSetting(w http.ResponseWriter, r *http.Request) {
 		_ = s.applyStorageSettings(r.Context())
 	}
 	writeJSON(w, 200, map[string]any{"key": key, "value": redactSetting(key, value)})
+}
+
+func (s *server) testStorage(w http.ResponseWriter, r *http.Request) {
+	storageSettings := s.settings(r.Context(), "storage")
+	storage, err := s.storageFromSettings(storageSettings)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "STORAGE_UNAVAILABLE", err.Error())
+		return
+	}
+	key := "healthcheck/" + requestID() + ".txt"
+	stored, err := storage.Put(r.Context(), key, strings.NewReader("imagehub storage healthcheck"), int64(len("imagehub storage healthcheck")), "text/plain")
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "STORAGE_TEST_FAILED", "storage write test failed")
+		return
+	}
+	if err = storage.Delete(r.Context(), stored.Key); err != nil {
+		writeErr(w, http.StatusBadGateway, "STORAGE_TEST_FAILED", "storage delete test failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "backend": stored.Backend})
 }
 
 func (s *server) testEmail(w http.ResponseWriter, r *http.Request) {

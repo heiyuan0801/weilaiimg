@@ -144,6 +144,10 @@ export function sendTestEmail(recipient: string) {
   })
 }
 
+export function testStorage() {
+  return imageHubFetch<{ ok: boolean; backend: string }>('/api/v1/admin/storage/test', { method: 'POST' })
+}
+
 export function listTeams() {
   return imageHubFetch<Team[]>('/api/v1/teams')
 }
