@@ -83,7 +83,7 @@ jobs:
             ## Docker
 
             ```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            docker pull ghcr.io/${{ github.repository }}:latest
             docker pull ghcr.io/${{ github.repository }}:latest
             ```
 

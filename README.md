@@ -70,7 +70,7 @@ docker compose up -d --build
 
 ```bash
 docker pull ghcr.io/heiyuan0801/weilaiimg:latest
-docker pull ghcr.io/heiyuan0801/weilaiimg:v0.1.0
+docker pull ghcr.io/heiyuan0801/weilaiimg:0.1.5
 ```
 
 单独运行应用容器时还需要可访问的 PostgreSQL 和 Redis：
