@@ -84,7 +84,6 @@ jobs:
 
             ```bash
             docker pull ghcr.io/${{ github.repository }}:latest
-            docker pull ghcr.io/${{ github.repository }}:latest
             ```
 
             Platforms: `linux/amd64`, `linux/arm64`
