@@ -1,6 +1,5 @@
-import { createFileRoute } from '@tanstack/react-router'
-import { ComingSoon } from '@/components/coming-soon'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/_authenticated/help-center/')({
-  component: ComingSoon,
+  beforeLoad: () => { throw redirect({ to: '/dashboard' }) },
 })

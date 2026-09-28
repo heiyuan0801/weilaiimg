@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Separator } from '@/components/ui/separator'
 import { SidebarTrigger } from '@/components/ui/sidebar'
+import { Languages } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { useI18n } from '@/lib/i18n'
 
 type HeaderProps = React.HTMLAttributes<HTMLElement> & {
   fixed?: boolean
@@ -9,6 +12,7 @@ type HeaderProps = React.HTMLAttributes<HTMLElement> & {
 }
 
 export function Header({ className, fixed, children, ...props }: HeaderProps) {
+  const { locale, setLocale, t } = useI18n()
   const [offset, setOffset] = useState(0)
 
   useEffect(() => {
@@ -44,6 +48,7 @@ export function Header({ className, fixed, children, ...props }: HeaderProps) {
         <SidebarTrigger variant='outline' className='max-md:scale-125' />
         <Separator orientation='vertical' className='h-6' />
         {children}
+        <div className='ms-auto'><Button variant='ghost' size='sm' onClick={() => setLocale(locale === 'zh-CN' ? 'en-US' : 'zh-CN')} aria-label={t('nav.language')}><Languages className='me-2 h-4 w-4' />{t('nav.language')}</Button></div>
       </div>
     </header>
   )

@@ -1,0 +1,8 @@
+node_modules
+.git
+.env
+uploads
+backend/tmp
+.DS_Store
+backups
+scripts

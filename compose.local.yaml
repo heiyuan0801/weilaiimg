@@ -1,0 +1,66 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    image: imagehub:local
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-18080}:8080"
+    environment:
+      ADDR: ":8080"
+      WEB_DIR: /app/web/dist
+      STORAGE_DIR: /app/uploads
+      DATABASE_URL: postgres://imagehub:${POSTGRES_PASSWORD:-imagehub}@postgres:5432/imagehub?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-imagehub}@redis:6379/0
+      APP_SECRET: ${APP_SECRET:-local-preview-change-me}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:18080}
+      COOKIE_SECURE: "false"
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-preview@example.local}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-preview-password-change-me}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:18080,http://127.0.0.1:18080}
+    volumes:
+      - imagehub_local_uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/healthz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  postgres:
+    image: postgres:18-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: imagehub
+      POSTGRES_USER: imagehub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-imagehub}
+    volumes:
+      - imagehub_local_postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U imagehub -d imagehub"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-imagehub}"]
+    volumes:
+      - imagehub_local_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-imagehub}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  imagehub_local_uploads:
+  imagehub_local_postgres:
+  imagehub_local_redis:

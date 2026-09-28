@@ -5,7 +5,8 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useNavigate } from '@tanstack/react-router'
 import { ArrowRight, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { sleep, cn } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { forgotPassword } from '@/lib/imagehub-api'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -35,19 +36,18 @@ export function ForgotPasswordForm({
     defaultValues: { email: '' },
   })
 
-  function onSubmit(data: z.infer<typeof formSchema>) {
+  async function onSubmit(data: z.infer<typeof formSchema>) {
     setIsLoading(true)
-
-    toast.promise(sleep(2000), {
-      loading: 'Sending email...',
-      success: () => {
-        setIsLoading(false)
-        form.reset()
-        navigate({ to: '/otp' })
-        return `Email sent to ${data.email}`
-      },
-      error: 'Error',
-    })
+    try {
+      await forgotPassword(data.email)
+      form.reset()
+      toast.success('If the account exists, a reset email will be sent.')
+      navigate({ to: '/sign-in' })
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not send reset email')
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (

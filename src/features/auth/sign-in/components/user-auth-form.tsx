@@ -1,13 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { Loader2, LogIn } from 'lucide-react'
 import { toast } from 'sonner'
-import { IconFacebook, IconGithub } from '@/assets/brand-icons'
 import { useAuthStore } from '@/stores/auth-store'
-import { sleep, cn } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { getCurrentUser, login, listPublicOIDCProviders, type PublicOIDCProvider } from '@/lib/imagehub-api'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -18,20 +18,32 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
 import { PasswordInput } from '@/components/password-input'
+import { useI18n } from '@/lib/i18n'
 
 const formSchema = z.object({
-  email: z.email({
-    error: (iss) => (iss.input === '' ? 'Please enter your email.' : undefined),
-  }),
+  email: z.string().min(1, 'Please enter your email or username.'),
   password: z
     .string()
     .min(1, 'Please enter your password.')
-    .min(7, 'Password must be at least 7 characters long.'),
+    .min(10, 'Password must be at least 10 characters long.'),
+  remember: z.boolean().default(false),
 })
 
 interface UserAuthFormProps extends React.HTMLAttributes<HTMLFormElement> {
   redirectTo?: string
+}
+
+function getSafeRedirect(value?: string) {
+  if (!value) return '/dashboard'
+  try {
+    const target = new URL(value, window.location.origin)
+    if (target.origin !== window.location.origin) return '/dashboard'
+    return `${target.pathname}${target.search}${target.hash}` || '/dashboard'
+  } catch {
+    return value.startsWith('/') ? value : '/dashboard'
+  }
 }
 
 export function UserAuthForm({
@@ -39,46 +51,39 @@ export function UserAuthForm({
   redirectTo,
   ...props
 }: UserAuthFormProps) {
+  const { t } = useI18n()
   const [isLoading, setIsLoading] = useState(false)
+  const [oidcProviders, setOIDCProviders] = useState<PublicOIDCProvider[]>([])
   const navigate = useNavigate()
   const { auth } = useAuthStore()
+  useEffect(() => { void listPublicOIDCProviders().then(setOIDCProviders).catch(() => undefined) }, [])
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       email: '',
       password: '',
+      remember: false,
     },
   })
 
-  function onSubmit(data: z.infer<typeof formSchema>) {
+  async function onSubmit(data: z.infer<typeof formSchema>) {
     setIsLoading(true)
-
-    toast.promise(sleep(2000), {
-      loading: 'Signing in...',
-      success: () => {
-        setIsLoading(false)
-
-        // Mock successful authentication with expiry computed at success time
-        const mockUser = {
-          accountNo: 'ACC001',
-          email: data.email,
-          role: ['user'],
-          exp: Date.now() + 24 * 60 * 60 * 1000, // 24 hours from now
-        }
-
-        // Set user and access token
-        auth.setUser(mockUser)
-        auth.setAccessToken('mock-access-token')
-
-        // Redirect to the stored location or default to dashboard
-        const targetPath = redirectTo || '/'
-        navigate({ to: targetPath, replace: true })
-
-        return `Welcome back, ${data.email}!`
-      },
-      error: 'Error',
-    })
+    try {
+      const result = await login(data)
+      // Verify that the browser retained the server session cookie before
+      // navigating into a protected route. This turns a cookie/CORS problem
+      // into a visible login error instead of a redirect loop.
+      const currentUser = await getCurrentUser()
+      auth.setUser({ accountNo: currentUser.id || result.user_id, email: currentUser.email || data.email, role: [currentUser.role || result.role], exp: Date.now() + 24 * 60 * 60 * 1000 })
+      auth.setAccessToken('cookie-session')
+      navigate({ to: getSafeRedirect(redirectTo), replace: true })
+      toast.success(`Welcome back, ${data.email}!`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not sign in')
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -93,9 +98,9 @@ export function UserAuthForm({
           name='email'
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Email</FormLabel>
+              <FormLabel>{t('auth.emailOrUsername')}</FormLabel>
               <FormControl>
-                <Input placeholder='name@example.com' {...field} />
+                <Input placeholder='name@example.com or username' {...field} />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -106,7 +111,7 @@ export function UserAuthForm({
           name='password'
           render={({ field }) => (
             <FormItem className='relative'>
-              <FormLabel>Password</FormLabel>
+              <FormLabel>{t('auth.password')}</FormLabel>
               <FormControl>
                 <PasswordInput placeholder='********' {...field} />
               </FormControl>
@@ -115,14 +120,19 @@ export function UserAuthForm({
                 to='/forgot-password'
                 className='absolute inset-e-0 -top-0.5 text-sm font-medium text-muted-foreground hover:opacity-75'
               >
-                Forgot password?
+                {t('auth.forgot')}
               </Link>
             </FormItem>
           )}
         />
+        <FormField
+          control={form.control}
+          name='remember'
+          render={({ field }) => <FormItem className='flex items-center gap-2 space-y-0'><FormControl><Checkbox checked={field.value} onCheckedChange={field.onChange} /></FormControl><FormLabel className='font-normal'>{t('auth.remember')}</FormLabel></FormItem>}
+        />
         <Button className='mt-2' disabled={isLoading}>
           {isLoading ? <Loader2 className='animate-spin' /> : <LogIn />}
-          Sign in
+          {t('auth.signIn')}
         </Button>
 
         <div className='relative my-2'>
@@ -131,19 +141,12 @@ export function UserAuthForm({
           </div>
           <div className='relative flex justify-center text-xs uppercase'>
             <span className='bg-background px-2 text-muted-foreground'>
-              Or continue with
+              {t('auth.continue')}
             </span>
           </div>
         </div>
 
-        <div className='grid grid-cols-2 gap-2'>
-          <Button variant='outline' type='button' disabled={isLoading}>
-            <IconGithub className='h-4 w-4' /> GitHub
-          </Button>
-          <Button variant='outline' type='button' disabled={isLoading}>
-            <IconFacebook className='h-4 w-4' /> Facebook
-          </Button>
-        </div>
+        {oidcProviders.length > 0 && <div className='grid gap-2'>{oidcProviders.map((provider) => <Button key={provider.id} variant='outline' type='button' disabled={isLoading} onClick={() => { window.location.assign(`/api/v1/auth/oidc/${provider.id}/start`) }}>Continue with {provider.name}</Button>)}</div>}
       </form>
     </Form>
   )

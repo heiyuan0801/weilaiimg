@@ -1,45 +1,29 @@
-import { getRouteApi } from '@tanstack/react-router'
-import { ConfigDrawer } from '@/components/config-drawer'
+import { useCallback, useEffect, useState } from 'react'
+import { RefreshCw, Save } from 'lucide-react'
+import { toast } from 'sonner'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Header } from '@/components/layout/header'
 import { Main } from '@/components/layout/main'
-import { ProfileDropdown } from '@/components/profile-dropdown'
-import { Search } from '@/components/search'
-import { ThemeSwitch } from '@/components/theme-switch'
-import { UsersDialogs } from './components/users-dialogs'
-import { UsersPrimaryButtons } from './components/users-primary-buttons'
-import { UsersProvider } from './components/users-provider'
-import { UsersTable } from './components/users-table'
-import { users } from './data/users'
+import { imageHubFetch } from '@/lib/imagehub-api'
+import { useI18n } from '@/lib/i18n'
 
-const route = getRouteApi('/_authenticated/users/')
+type AdminUser = { id: string; email: string; display_name: string; role: string; status: string; quota_bytes: number; used_bytes: number; max_file_bytes: number; daily_upload_limit: number; upload_policy?: Record<string, unknown>; created_at: string }
+const gb = (value: number) => `${(value / 1024 ** 3).toFixed(1)} GB`
 
 export function Users() {
-  const search = route.useSearch()
-  const navigate = route.useNavigate()
-
-  return (
-    <UsersProvider>
-      <Header fixed>
-        <Search className='me-auto' />
-        <ThemeSwitch />
-        <ConfigDrawer />
-        <ProfileDropdown />
-      </Header>
-
-      <Main className='flex flex-1 flex-col gap-4 sm:gap-6'>
-        <div className='flex flex-wrap items-end justify-between gap-2'>
-          <div>
-            <h2 className='text-2xl font-bold tracking-tight'>User List</h2>
-            <p className='text-muted-foreground'>
-              Manage your users and their roles here.
-            </p>
-          </div>
-          <UsersPrimaryButtons />
-        </div>
-        <UsersTable data={users} search={search} navigate={navigate} />
-      </Main>
-
-      <UsersDialogs />
-    </UsersProvider>
-  )
+  const { t } = useI18n()
+  const [users, setUsers] = useState<AdminUser[]>([])
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState<string | null>(null)
+  const load = useCallback(() => { setLoading(true); void imageHubFetch<AdminUser[]>('/api/v1/admin/users').then(setUsers).catch((error) => toast.error(error instanceof Error ? error.message : 'Could not load users')).finally(() => setLoading(false)) }, [])
+  useEffect(() => { load() }, [load])
+  async function save(user: AdminUser) { setSaving(user.id); try { await imageHubFetch(`/api/v1/admin/users/${user.id}/policy`, { method: 'PATCH', body: JSON.stringify({ quota_bytes: user.quota_bytes, max_file_bytes: user.max_file_bytes, daily_upload_limit: user.daily_upload_limit, upload_policy: user.upload_policy ?? {} }) }); toast.success(t('users.policySaved')) } catch (error) { toast.error(error instanceof Error ? error.message : 'Could not save policy') } finally { setSaving(null) } }
+  function policy(user: AdminUser, key: string, fallback: string) { return String(user.upload_policy?.[key] ?? fallback) }
+  function updatePolicy(user: AdminUser, key: string, value: string) { setUsers((all) => all.map((item) => item.id === user.id ? { ...item, upload_policy: { ...(item.upload_policy ?? {}), [key]: value } } : item)) }
+  async function updateStatus(user: AdminUser, status: string) { setSaving(user.id); try { await imageHubFetch(`/api/v1/admin/users/${user.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); setUsers((all) => all.map((item) => item.id === user.id ? { ...item, status } : item)); toast.success('User status updated') } catch (error) { toast.error(error instanceof Error ? error.message : 'Could not update user') } finally { setSaving(null) } }
+  return <><Header fixed><h1 className='text-lg font-semibold'>{t('users.title')}</h1></Header><Main className='space-y-6'><div className='flex items-end justify-between gap-3'><div><h1 className='text-2xl font-bold tracking-tight'>{t('users.title')} & upload policies</h1><p className='text-muted-foreground'>{t('users.description')}</p></div><Button variant='outline' onClick={load} disabled={loading}><RefreshCw className='me-2 h-4 w-4' />{t('users.refresh')}</Button></div><Card><CardHeader><CardTitle>{users.length} {t('users.accounts')}</CardTitle></CardHeader><CardContent className='overflow-x-auto'><Table><TableHeader><TableRow><TableHead>Account</TableHead><TableHead>Status</TableHead><TableHead>Used</TableHead><TableHead>Quota (bytes)</TableHead><TableHead>File limit (bytes)</TableHead><TableHead>Daily files</TableHead><TableHead>Naming</TableHead><TableHead>Directory</TableHead><TableHead className='text-right'>{t('users.save')}</TableHead></TableRow></TableHeader><TableBody>{users.map((user) => <TableRow key={user.id}><TableCell><div className='font-medium'>{user.display_name || user.email}</div><div className='text-xs text-muted-foreground'>{user.email}</div></TableCell><TableCell><div className='flex items-center gap-2'><Badge variant={user.status === 'active' ? 'default' : 'outline'}>{user.role}</Badge><select aria-label={`Status for ${user.email}`} className='h-8 rounded-md border bg-background px-2 text-xs' value={user.status} onChange={(event) => void updateStatus(user, event.target.value)} disabled={saving !== null}><option value='active'>Active</option><option value='disabled'>Disabled</option><option value='pending'>Pending</option></select></div></TableCell><TableCell>{gb(user.used_bytes)}</TableCell><TableCell><Input className='w-36' type='number' value={user.quota_bytes} onChange={(event) => setUsers((all) => all.map((item) => item.id === user.id ? { ...item, quota_bytes: Number(event.target.value) } : item))} /></TableCell><TableCell><Input className='w-36' type='number' value={user.max_file_bytes} onChange={(event) => setUsers((all) => all.map((item) => item.id === user.id ? { ...item, max_file_bytes: Number(event.target.value) } : item))} /></TableCell><TableCell><Input className='w-24' type='number' value={user.daily_upload_limit} onChange={(event) => setUsers((all) => all.map((item) => item.id === user.id ? { ...item, daily_upload_limit: Number(event.target.value) } : item))} /></TableCell><TableCell><select className='h-8 rounded-md border bg-background px-2 text-xs' value={policy(user, 'naming_mode', 'sha256')} onChange={(event) => updatePolicy(user, 'naming_mode', event.target.value)}><option value='sha256'>SHA-256</option><option value='md5'>MD5</option><option value='original'>Original</option><option value='uuid'>UUID-like</option><option value='random'>Random</option></select></TableCell><TableCell><select className='h-8 rounded-md border bg-background px-2 text-xs' value={policy(user, 'directory_rule', 'hash2')} onChange={(event) => updatePolicy(user, 'directory_rule', event.target.value)}><option value='hash2'>Hash prefix</option><option value='none'>None</option><option value='year'>Year</option><option value='ym'>Year/month</option><option value='ymd'>Year/month/day</option></select></TableCell><TableCell className='text-right'><Button size='sm' onClick={() => void save(user)} disabled={saving !== null}><Save className='me-1 h-4 w-4' />{saving === user.id ? 'Saving…' : t('users.save')}</Button></TableCell></TableRow>)}</TableBody></Table>{!loading && users.length === 0 && <p className='py-12 text-center text-muted-foreground'>{t('users.noAccounts')}</p>}</CardContent></Card></Main></>
 }

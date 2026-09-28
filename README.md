@@ -72,7 +72,7 @@ If you want to update components using the Shadcn CLI (e.g., `npx shadcn@latest 
 
 **Icons:** [Lucide Icons](https://lucide.dev/icons/), [Tabler Icons](https://tabler.io/icons) (Brand icons only)
 
-**Auth (partial):** [Clerk](https://go.clerk.com/GttUAaK)
+**Auth:** ImageHub local sessions and OIDC in the Go API; the original Clerk demo routes remain available for UI reference.
 
 ## Run Locally
 
@@ -117,3 +117,11 @@ Crafted with 🤍 by [@satnaing](https://github.com/satnaing)
 ## License
 
 Licensed under the [MIT License](https://choosealicense.com/licenses/mit/)
+
+## ImageHub full-stack mode
+
+This repository now contains the initial ImageHub implementation. The React/Shadcn admin is served by the Go API in the production image. See [`backend/README.md`](backend/README.md) and [`outputs/IMAGE_HOSTING_SYSTEM_PLAN.md`](../../outputs/IMAGE_HOSTING_SYSTEM_PLAN.md) for the current architecture, Docker deployment and remaining milestones.
+
+### ImageHub implementation status
+
+ImageHub includes a real Go API, PostgreSQL migrations, Redis sessions, local login/registration/recovery pages, local/Telegram storage adapters, SVG/GIF/video and remote import endpoints, a PostgreSQL media worker, system settings, image library search/filter/bulk actions, team/member invitations, Stripe checkout/webhook reconciliation, verified custom domains with Caddy on-demand TLS, Cloudflare purge hooks, OIDC PKCE/JWKS validation, Docker Compose, and backup/restore scripts. Deployment and operational requirements are in [DEPLOYMENT.md](./DEPLOYMENT.md); the detailed scope is tracked in [the implementation plan](../../outputs/IMAGE_HOSTING_SYSTEM_PLAN.md).
