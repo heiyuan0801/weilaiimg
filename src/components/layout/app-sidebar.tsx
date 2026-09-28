@@ -33,7 +33,7 @@ export function AppSidebar() {
       return [{ ...item, items: item.items.filter((subItem) => role === 'admin' || subItem.title !== 'System settings') }]
     }),
   })).filter((group) => group.items.length > 0)
-  const labels: Record<string, string> = { Library: 'nav.library', Administration: 'nav.administration', Support: 'nav.support', Dashboard: 'nav.dashboard', 'Image library': 'nav.images', 'All media': 'nav.allMedia', Teams: 'nav.teams', Billing: 'nav.billing', 'Custom domains': 'nav.domains', Users: 'nav.users', Settings: 'nav.settings', Profile: 'nav.profile', Account: 'nav.account', Appearance: 'nav.appearance', Notifications: 'nav.notifications', Display: 'nav.display', 'System settings': 'nav.system', 'Help Center': 'nav.help' }
+  const labels: Record<string, string> = { Library: 'nav.library', Administration: 'nav.administration', Dashboard: 'nav.dashboard', 'Image library': 'nav.images', 'All media': 'nav.allMedia', Teams: 'nav.teams', Billing: 'nav.billing', 'Custom domains': 'nav.domains', Users: 'nav.users', Settings: 'nav.settings', Profile: 'nav.profile', Account: 'nav.account', Appearance: 'nav.appearance', Notifications: 'nav.notifications', Display: 'nav.display', 'System settings': 'nav.system' }
   const translatedNavGroups = visibleNavGroups.map((group) => ({ ...group, title: t(labels[group.title] ?? group.title, group.title), items: group.items.map((item) => ({ ...item, title: t(labels[item.title] ?? item.title, item.title), items: item.items?.map((subItem) => ({ ...subItem, title: t(labels[subItem.title] ?? subItem.title, subItem.title) })) })) }))
   return (
     <Sidebar collapsible={collapsible} variant={variant}>
